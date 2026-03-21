@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Beam</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --card: #21263a;
+    --accent: #6c8eff; --accent2: #ff6c9d; --text: #e8eaf6;
+    --sub: #8892b0; --border: #2d3555; --success: #4ade80;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: .5px; }
+  header .tagline { color: var(--sub); font-size: 0.78rem; margin-left: 2px; }
+  header .badge { background: var(--accent); color: #fff; font-size: 0.65rem; padding: 2px 8px; border-radius: 20px; font-weight: 600; letter-spacing: .5px; margin-left: auto; }
+  .role-bar { background: var(--card); border-bottom: 1px solid var(--border); display: flex; padding: 0 20px; }
+  .role-btn { padding: 12px 22px; font-size: 0.85rem; font-weight: 600; color: var(--sub); cursor: pointer; border: none; background: none; border-bottom: 3px solid transparent; transition: all .2s; letter-spacing: .3px; }
+  .role-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .main { max-width: 700px; margin: 0 auto; padding: 24px 16px; }
+  .section { display: none; }
+  .section.active { display: block; }
+
+  .setup-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 28px; margin-bottom: 20px; }
+  .setup-card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 6px; }
+  .setup-card p { color: var(--sub); font-size: 0.85rem; line-height: 1.6; margin-bottom: 16px; }
+  .step { display: flex; gap: 14px; margin-bottom: 14px; align-items: flex-start; }
+  .step-num { background: var(--accent); color: #fff; font-size: 0.75rem; font-weight: 800; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .step p { margin: 0; font-size: 0.85rem; color: var(--sub); }
+  .step p strong { color: var(--text); }
+  .room-row { display: flex; gap: 10px; margin-top: 8px; }
+  input[type=text] { flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 10px 14px; font-size: 0.9rem; outline: none; transition: border .2s; }
+  input[type=text]:focus { border-color: var(--accent); }
+  .btn { background: var(--accent); color: #fff; border: none; border-radius: 10px; padding: 10px 20px; font-size: 0.85rem; font-weight: 700; cursor: pointer; transition: opacity .2s, transform .1s; }
+  .btn:hover { opacity: .85; }
+  .btn:active { transform: scale(.97); }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--sub); }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #555; display: inline-block; margin-right: 6px; }
+  .status-dot.connected { background: var(--success); box-shadow: 0 0 8px var(--success); }
+  #status-line { font-size: 0.82rem; color: var(--sub); display: flex; align-items: center; margin-top: 14px; }
+
+  .chat-area { background: var(--card); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; height: 440px; }
+  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .messages::-webkit-scrollbar { width: 4px; } .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 14px; font-size: 0.88rem; line-height: 1.5; }
+  .msg.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.them { align-self: flex-start; background: var(--surface); color: var(--text); border-bottom-left-radius: 4px; }
+  .msg .meta { font-size: 0.7rem; opacity: .7; margin-top: 4px; }
+  .file-pill { display: flex; align-items: center; gap: 10px; }
+  .file-icon { font-size: 1.4rem; }
+  .file-info .name { font-weight: 700; font-size: 0.85rem; word-break: break-all; }
+  .file-info .size { font-size: 0.72rem; opacity: .75; }
+  .dl-btn { background: rgba(255,255,255,.2); border: none; color: inherit; padding: 4px 10px; border-radius: 8px; font-size: 0.75rem; cursor: pointer; margin-top: 6px; font-weight: 600; }
+  .dl-btn:hover { background: rgba(255,255,255,.35); }
+  .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); background: var(--surface); }
+  .composer input { flex: 1; }
+  .attach-btn { background: var(--card); border: 1px solid var(--border); color: var(--sub); border-radius: 10px; padding: 10px 12px; font-size: 1.1rem; cursor: pointer; transition: color .2s; }
+  .attach-btn:hover { color: var(--accent); }
+  #file-input { display: none; }
+  .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--sub); gap: 8px; font-size: 0.85rem; }
+  .empty-state .icon { font-size: 2.5rem; }
+
+  .info-box { background: #1a2540; border: 1px solid #2d4a8a; border-radius: 12px; padding: 14px 18px; font-size: 0.82rem; color: #a0b4d6; line-height: 1.7; margin-bottom: 20px; }
+  .info-box strong { color: var(--accent); }
+  .code-block { background: #0a0d16; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; font-family: 'Courier New', monospace; font-size: 0.82rem; color: #a8d8a8; overflow-x: auto; margin: 10px 0; }
+  .copy-code-btn { font-size: 0.75rem; padding: 6px 14px; margin-top: 6px; }
+  .tag { display: inline-block; background: var(--surface); border: 1px solid var(--border); color: var(--sub); font-size: 0.72rem; padding: 2px 8px; border-radius: 6px; margin: 2px; }
+
+  @media (max-width: 480px) { .main { padding: 16px 10px; } .msg { max-width: 92%; } }
+</style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.5rem">🔦</span>
+  <div>
+    <h1>Beam</h1>
+    <div class="tagline">beam it over</div>
+  </div>
+  <span class="badge">P2P</span>
+</header>
+
+<div class="role-bar">
+  <button class="role-btn active" onclick="showTab('connect',this)">Connect</button>
+  <button class="role-btn" onclick="showTab('transfer',this)">Transfer</button>
+  <button class="role-btn" onclick="showTab('install',this)">PC App</button>
+</div>
+
+<div class="main">
+
+  <!-- CONNECT TAB -->
+  <div id="tab-connect" class="section active">
+    <div class="info-box">
+      <strong>How it works:</strong> Both devices open this page. One creates a room, the other joins with the same code. Files and messages transfer peer-to-peer via WebRTC — no server stores your data.
+    </div>
+    <div class="setup-card">
+      <h2>🔑 Room Setup</h2>
+      <p>Create a new room or join an existing one using the same code on both devices.</p>
+      <div class="room-row">
+        <input type="text" id="room-input" placeholder="Room code (e.g. apple-fox-42)" />
+        <button class="btn" onclick="joinRoom()">Join / Create</button>
+      </div>
+      <button class="btn ghost" style="margin-top:10px;font-size:0.8rem" onclick="genCode()">🎲 Generate code</button>
+      <div id="status-line"><span class="status-dot" id="dot"></span><span id="status-text">Not connected</span></div>
+    </div>
+    <div class="setup-card">
+      <h2>📋 Quick Steps</h2>
+      <div class="step"><div class="step-num">1</div><p><strong>Open Beam on both devices</strong> — phone and PC, in any browser.</p></div>
+      <div class="step"><div class="step-num">2</div><p><strong>Enter the same room code</strong> on both devices and tap Join.</p></div>
+      <div class="step"><div class="step-num">3</div><p><strong>Head to the Transfer tab</strong> to beam files or messages instantly.</p></div>
+    </div>
+  </div>
+
+  <!-- TRANSFER TAB -->
+  <div id="tab-transfer" class="section">
+    <div id="not-connected-msg" class="info-box" style="margin-bottom:16px">
+      ⚠️ <strong>Not connected yet.</strong> Go to the Connect tab and join a room first.
+    </div>
+    <div class="chat-area">
+      <div class="messages" id="messages">
+        <div class="empty-state">
+          <div class="icon">🔦</div>
+          <div>Beamed files and messages appear here</div>
+        </div>
+      </div>
+      <div class="composer">
+        <button class="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach file">📎</button>
+        <input type="file" id="file-input" multiple onchange="sendFiles(this.files)">
+        <input type="text" id="msg-input" placeholder="Beam a message…" onkeydown="if(event.key==='Enter')sendMsg()">
+        <button class="btn" onclick="sendMsg()">Beam</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PC APP TAB -->
+  <div id="tab-install" class="section">
+    <div class="setup-card">
+      <h2>🖥️ Install Beam as a PC App</h2>
+      <p>You can install Beam as a Progressive Web App (PWA) on your PC — it sits in your taskbar like a real app with no browser UI. Works on Windows, Mac, and Linux.</p>
+      <div class="step"><div class="step-num">1</div><p>Open Beam in <strong>Chrome or Edge</strong> on your PC.</p></div>
+      <div class="step"><div class="step-num">2</div><p>Click the <strong>install icon</strong> in the address bar (screen with a ➕), or go to <strong>Menu → Install Beam</strong>.</p></div>
+      <div class="step"><div class="step-num">3</div><p>It launches in its own window — pin it to your taskbar for one-click access.</p></div>
+    </div>
+    <div class="setup-card">
+      <h2>⚡ Self-Host Locally</h2>
+      <p>For the fastest transfers, save this HTML file and serve it on your local network. Both devices must be on the same WiFi.</p>
+      <div class="step"><div class="step-num">1</div><p>Save this page as <strong>beam.html</strong></p></div>
+      <div class="step"><div class="step-num">2</div><p>In a terminal, navigate to the folder and run:</p></div>
+      <div class="code-block">python3 -m http.server 8080</div>
+      <button class="btn ghost copy-code-btn" onclick="copyCode('python3 -m http.server 8080')">📋 Copy</button>
+      <div class="step" style="margin-top:12px"><div class="step-num">3</div><p>On your phone, open <strong>http://[your-PC-local-IP]:8080/beam.html</strong></p></div>
+      <p style="color:var(--sub);font-size:0.8rem;margin-top:8px">💡 Find your local IP with <code style="color:var(--accent)">ipconfig</code> (Windows) or <code style="color:var(--accent)">ifconfig</code> (Mac/Linux)</p>
+    </div>
+    <div class="setup-card">
+      <h2>🔗 Works Anywhere</h2>
+      <p>WebRTC punches through NAT — so Beam works across different networks too, not just local WiFi.</p>
+      <div><span class="tag">📱 iOS Safari</span><span class="tag">🤖 Android Chrome</span><span class="tag">🪟 Windows</span><span class="tag">🍎 macOS</span><span class="tag">🐧 Linux</span></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let peer = null, conn = null, myId = '', roomCode = '';
+const adj = ['amber','azure','bold','calm','deep','fast','grand','happy','iron','jade','kind','lush','merry','noble','open','proud','quiet','rapid','sharp','swift','tall','urban','vivid','warm','xenial','young','zesty'];
+const nou = ['apple','bear','cloud','duck','eagle','fox','grove','hawk','iris','jade','kite','lark','maple','nova','orbit','pine','quail','raven','storm','thorn','umbra','viper','wave','xenon','yak','zeal'];
+
+function genCode() {
+  const a = adj[Math.floor(Math.random()*adj.length)];
+  const n = nou[Math.floor(Math.random()*nou.length)];
+  const d = Math.floor(Math.random()*90)+10;
+  document.getElementById('room-input').value = `${a}-${n}-${d}`;
+}
+
+function setStatus(text, connected) {
+  document.getElementById('status-text').textContent = text;
+  document.getElementById('dot').className = 'status-dot' + (connected ? ' connected' : '');
+  document.getElementById('not-connected-msg').style.display = connected ? 'none' : 'block';
+}
+
+function showTab(t, btn) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-'+t).classList.add('active');
+  btn.classList.add('active');
+}
+
+function loadPeerJS(cb) {
+  if (window.Peer) { cb(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js';
+  s.onload = cb; document.head.appendChild(s);
+}
+
+function joinRoom() {
+  roomCode = document.getElementById('room-input').value.trim();
+  if (!roomCode) { alert('Enter a room code first.'); return; }
+  setStatus('Loading…', false);
+  loadPeerJS(() => initPeer());
+}
+
+function initPeer() {
+  if (peer) { peer.destroy(); }
+  const h = s => s.split('').reduce((a,c) => (a*31+c.charCodeAt(0))|0, 0);
+  const hash = Math.abs(h(roomCode)).toString(36);
+  const idA = 'beam-' + hash + '-A';
+  const idB = 'beam-' + hash + '-B';
+  tryConnect(idA, idB);
+}
+
+function tryConnect(myIdTry, otherIdTry) {
+  setStatus('Claiming ID…', false);
+  peer = new Peer(myIdTry, { debug: 0 });
+  peer.on('open', id => {
+    myId = id;
+    setStatus('Waiting for peer… (code: ' + roomCode + ')', false);
+    setTimeout(() => attemptOutgoing(otherIdTry), 800);
+  });
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id') {
+      peer.destroy();
+      peer = new Peer(otherIdTry, { debug: 0 });
+      peer.on('open', id => {
+        myId = id;
+        setStatus('Connecting…', false);
+        setTimeout(() => attemptOutgoing(myIdTry), 800);
+      });
+      peer.on('connection', setupConn);
+      peer.on('error', err => setStatus('Error: ' + err.type, false));
+    } else {
+      setStatus('Error: ' + e.type, false);
+    }
+  });
+  peer.on('connection', setupConn);
+}
+
+function attemptOutgoing(targetId) {
+  if (conn && conn.open) return;
+  const c = peer.connect(targetId, { reliable: true });
+  setupConn(c);
+}
+
+function setupConn(c) {
+  if (conn && conn.open) return;
+  conn = c;
+  conn.on('open', () => { setStatus('Connected ✓ — ' + roomCode, true); addSystemMsg('🔦 Beam connected'); });
+  conn.on('data', onData);
+  conn.on('close', () => { setStatus('Peer disconnected', false); addSystemMsg('❌ Disconnected'); conn = null; });
+  conn.on('error', err => addSystemMsg('⚠️ ' + err));
+}
+
+function sendMsg() {
+  const inp = document.getElementById('msg-input');
+  const text = inp.value.trim();
+  if (!text) return;
+  if (!conn || !conn.open) { alert('Not connected. Join a room first.'); return; }
+  conn.send({ type: 'msg', text, time: Date.now() });
+  addMsg(text, 'me', Date.now());
+  inp.value = '';
+}
+
+function sendFiles(files) {
+  if (!conn || !conn.open) { alert('Not connected. Join a room first.'); return; }
+  [...files].forEach(f => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      conn.send({ type: 'file', name: f.name, size: f.size, mime: f.type, data: e.target.result, time: Date.now() });
+      addFileMsg(f.name, f.size, e.target.result, f.type, 'me', Date.now());
+    };
+    reader.readAsDataURL(f);
+  });
+}
+
+function onData(d) {
+  if (d.type === 'msg') addMsg(d.text, 'them', d.time);
+  else if (d.type === 'file') addFileMsg(d.name, d.size, d.data, d.mime, 'them', d.time);
+}
+
+function addMsg(text, who, ts) {
+  clearEmpty();
+  const el = document.createElement('div');
+  el.className = 'msg ' + who;
+  el.innerHTML = `<div>${esc(text)}</div><div class="meta">${fmtTime(ts)}</div>`;
+  document.getElementById('messages').appendChild(el);
+  scrollBottom();
+}
+
+function addFileMsg(name, size, dataUrl, mime, who, ts) {
+  clearEmpty();
+  const el = document.createElement('div');
+  el.className = 'msg file-msg ' + who;
+  el.innerHTML = `<div class="file-pill"><div class="file-icon">${getIcon(mime,name)}</div><div class="file-info"><div class="name">${esc(name)}</div><div class="size">${fmtSize(size)}</div><br><button class="dl-btn" onclick="downloadFile('${encodeURIComponent(name)}','${encodeURIComponent(dataUrl)}')">⬇ Save</button></div></div><div class="meta">${fmtTime(ts)}</div>`;
+  document.getElementById('messages').appendChild(el);
+  scrollBottom();
+}
+
+function addSystemMsg(text) {
+  const el = document.createElement('div');
+  el.style.cssText = 'text-align:center;font-size:.75rem;color:var(--sub);padding:4px 0';
+  el.textContent = text;
+  document.getElementById('messages').appendChild(el);
+  scrollBottom();
+}
+
+function downloadFile(name, dataUrl) {
+  const a = document.createElement('a');
+  a.href = decodeURIComponent(dataUrl);
+  a.download = decodeURIComponent(name);
+  a.click();
+}
+
+function clearEmpty() { const e = document.getElementById('messages').querySelector('.empty-state'); if (e) e.remove(); }
+function scrollBottom() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtTime(ts) { return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+function fmtSize(b) { return b>1048576?(b/1048576).toFixed(1)+' MB':b>1024?(b/1024).toFixed(0)+' KB':b+' B'; }
+function getIcon(mime='',name='') {
+  if (mime.startsWith('image/')) return '🖼️';
+  if (mime.startsWith('video/')) return '🎬';
+  if (mime.startsWith('audio/')) return '🎵';
+  if (mime.includes('pdf')) return '📄';
+  if (mime.includes('zip')||mime.includes('compressed')) return '📦';
+  if (mime.includes('word')||name.match(/\.docx?$/i)) return '📝';
+  if (mime.includes('sheet')||name.match(/\.xlsx?$/i)) return '📊';
+  return '📁';
+}
+function copyCode(t) { navigator.clipboard.writeText(t).then(()=>alert('Copied!')); }
+
+genCode();
+</script>
+</body>
+</html>
