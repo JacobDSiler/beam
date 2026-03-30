@@ -151,6 +151,14 @@ input::placeholder{color:var(--text3)}
 
 .empty-state{text-align:center;padding:30px;color:var(--text3);font-size:13px}
 
+.item-card.locked{border-color:var(--accent-dim)}
+.item-card.locked .item-msg,.item-card.locked .item-name{
+  filter:blur(5px);user-select:none;pointer-events:none;
+}
+.item-locked-badge{font-size:10px;color:var(--accent);background:var(--accent-dim);padding:2px 8px;
+  border-radius:10px;display:inline-flex;align-items:center;gap:3px;margin-top:3px;font-weight:600;letter-spacing:.3px}
+.item-lock-active{color:var(--accent) !important;border-color:var(--accent) !important}
+
 .upload-progress{
   background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius-sm);
   padding:12px 16px;
@@ -312,7 +320,14 @@ input::placeholder{color:var(--text3)}
 
     <div class="msg-input-row">
       <input type="text" id="msg-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendMessage()">
+      <button class="btn-icon" id="item-lock-btn" title="Add passcode to next send" onclick="toggleItemLock()" style="flex-shrink:0">&#x1f513;</button>
       <button class="btn-secondary" onclick="sendMessage()">Send</button>
+    </div>
+    <div id="item-passcode-row" style="display:none;margin-top:-12px">
+      <div class="msg-input-row">
+        <input type="password" id="item-passcode-input" placeholder="Passcode for this item..." style="flex:1;font-size:13px">
+      </div>
+      <div class="field-hint" style="margin-top:4px">This passcode protects the next file or message you send.</div>
     </div>
 
     <div class="items-section">
@@ -353,6 +368,21 @@ input::placeholder{color:var(--text3)}
       <button class="btn-secondary" onclick="confirmDelete('local')" style="width:100%;text-align:center">Hide on this device only</button>
       <button class="btn-primary" onclick="confirmDelete('cloud')" style="width:100%;background:var(--warn);color:#fff;text-align:center">Delete from mailbox for everyone</button>
       <button class="btn-secondary" onclick="closeDeleteModal()" style="width:100%;text-align:center;color:var(--text3)">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Item Unlock Modal -->
+<div class="modal-overlay" id="item-unlock-modal">
+  <div class="modal">
+    <h3>&#x1f512; Item Protected</h3>
+    <p>This item is passcode-protected. Enter the passcode to view it.</p>
+    <div class="field-group">
+      <input type="password" id="item-unlock-passcode" placeholder="Enter item passcode" onkeydown="if(event.key==='Enter')submitItemUnlock()">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeItemUnlockModal()">Cancel</button>
+      <button class="btn-primary" onclick="submitItemUnlock()">Unlock</button>
     </div>
   </div>
 </div>
@@ -580,20 +610,102 @@ function listenToItems(code) {
 
 function renderItem(item) {
   const div = document.createElement('div');
-  div.className = 'item-card';
+  const isLocked = !!item.itemPasscodeHash;
+  const isUnlocked = unlockedItems.has(item.id);
+  div.className = 'item-card' + (isLocked && !isUnlocked ? ' locked' : '');
+
+  const lockBadge = isLocked ? `<div class="item-locked-badge">&#x1f512; Protected</div>` : '';
+
   if (item.type === 'message') {
+    const msgContent = isLocked && !isUnlocked ? '••••••••••••' : escapeHtml(item.text);
+    const unlockBtn = isLocked && !isUnlocked
+      ? `<button class="btn-icon" title="Unlock" onclick="promptItemUnlock('${item.id}','view')">&#x1f513;</button>` : '';
     div.innerHTML = `<div class="item-icon">&#x1f4ac;</div>
-      <div class="item-info"><div class="item-msg">${escapeHtml(item.text)}</div><div class="item-meta">${timeAgo(item.createdAt?.toDate())}</div></div>
-      <div class="item-actions"><button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','message')">&#x1f5d1;</button></div>`;
+      <div class="item-info"><div class="item-msg">${msgContent}</div>${lockBadge}<div class="item-meta">${timeAgo(item.createdAt?.toDate())}</div></div>
+      <div class="item-actions">${unlockBtn}<button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','message')">&#x1f5d1;</button></div>`;
   } else {
+    const nameDisplay = isLocked && !isUnlocked ? '&#x1f512; Protected file' : escapeHtml(item.fileName);
+    const downloadBtn = isLocked && !isUnlocked
+      ? `<button class="btn-icon" title="Unlock to download" onclick="promptItemUnlock('${item.id}','download')">&#x1f513;</button>`
+      : `<button class="btn-icon" title="Download" onclick="downloadItem('${item.id}')">&#x2b07;</button>`;
     div.innerHTML = `<div class="item-icon">${fileIcon(item.fileName)}</div>
-      <div class="item-info"><div class="item-name">${escapeHtml(item.fileName)}</div><div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
+      <div class="item-info"><div class="item-name">${nameDisplay}</div>${lockBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
       <div class="item-actions">
-        <button class="btn-icon" title="Download" onclick="downloadItem('${item.id}')">&#x2b07;</button>
+        ${downloadBtn}
         <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','${item.storagePath||''}','file')">&#x1f5d1;</button>
       </div>`;
   }
   return div;
+}
+
+// ===================== ITEM LOCK TOGGLE =====================
+let itemLockOn = false;
+const unlockedItems = new Set(); // items unlocked this session
+
+function toggleItemLock() {
+  itemLockOn = !itemLockOn;
+  const btn = document.getElementById('item-lock-btn');
+  const row = document.getElementById('item-passcode-row');
+  btn.innerHTML = itemLockOn ? '&#x1f512;' : '&#x1f513;';
+  btn.classList.toggle('item-lock-active', itemLockOn);
+  row.style.display = itemLockOn ? 'block' : 'none';
+  if (itemLockOn) document.getElementById('item-passcode-input').focus();
+  else document.getElementById('item-passcode-input').value = '';
+}
+
+function getItemPasscode() {
+  if (!itemLockOn) return null;
+  const val = document.getElementById('item-passcode-input').value.trim();
+  return val || null;
+}
+
+function clearItemPasscode() {
+  document.getElementById('item-passcode-input').value = '';
+}
+
+// ===================== ITEM UNLOCK MODAL =====================
+let pendingUnlock = { itemId: null, action: null };
+
+function promptItemUnlock(itemId, action) {
+  pendingUnlock = { itemId, action };
+  document.getElementById('item-unlock-modal').classList.add('active');
+  setTimeout(() => document.getElementById('item-unlock-passcode').focus(), 100);
+}
+
+function closeItemUnlockModal() {
+  document.getElementById('item-unlock-modal').classList.remove('active');
+  document.getElementById('item-unlock-passcode').value = '';
+  pendingUnlock = { itemId: null, action: null };
+}
+
+async function submitItemUnlock() {
+  const input = document.getElementById('item-unlock-passcode').value.trim();
+  if (!input) return;
+  const { itemId, action } = pendingUnlock;
+  if (!itemId || !currentBox) return;
+
+  try {
+    const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
+    const data = d.data();
+    const hash = await hashPasscode(input);
+
+    if (hash !== data.itemPasscodeHash) {
+      toast('Wrong passcode', true);
+      return;
+    }
+
+    unlockedItems.add(itemId);
+    closeItemUnlockModal();
+    // Refresh list to show unlocked content
+    listenToItems(currentBox.code);
+
+    if (action === 'download') {
+      setTimeout(() => downloadItem(itemId), 300);
+    }
+    toast('Item unlocked');
+  } catch (e) {
+    toast('Unlock failed', true);
+  }
 }
 
 // ===================== DELETE CONFIRMATION MODAL =====================
@@ -650,6 +762,9 @@ async function handleFiles(files) {
   if (!currentBox || !files.length) return;
   if (!storageReady || !storage) { toast('File storage needs Blaze plan. Messages still work!', true); return; }
 
+  const itemPass = getItemPasscode();
+  const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
+
   for (const file of files) {
     let usedBytes = 0;
     try { const d = await db.collection('boxes').doc(currentBox.code).get(); usedBytes = d.data()?.totalBytes || 0; } catch(e) {}
@@ -672,18 +787,20 @@ async function handleFiles(files) {
       await task;
       const url = await storage.ref(storagePath).getDownloadURL();
 
-      await db.collection('boxes').doc(currentBox.code).collection('items').add({
+      const itemData = {
         type: 'file', fileName: file.name, size: file.size, mimeType: file.type,
         storagePath, downloadURL: url, createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      };
+      if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
+
+      await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
       await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(file.size) });
 
-      // RTC bonus notification
       if (peerConnected && dataChannel?.readyState === 'open') {
         dataChannel.send(JSON.stringify({ type: 'file-notify', fileName: file.name, size: file.size }));
       }
       progressEl.style.display = 'none';
-      toast('Uploaded ' + file.name);
+      toast('Uploaded ' + file.name + (itemPassHash ? ' (protected)' : ''));
     } catch (e) {
       console.error('Upload error:', e);
       progressEl.style.display = 'none';
@@ -691,6 +808,7 @@ async function handleFiles(files) {
       if (e.code?.includes('unauthorized')) storageReady = false;
     }
   }
+  clearItemPasscode();
 }
 
 // ===================== SEND MESSAGE — Always Firebase, RTC bonus =====================
@@ -699,13 +817,22 @@ async function sendMessage() {
   const text = input.value.trim();
   if (!text || !currentBox) return;
   input.value = '';
+
+  const itemPass = getItemPasscode();
+  const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
+
   try {
-    await db.collection('boxes').doc(currentBox.code).collection('items').add({
+    const itemData = {
       type: 'message', text, createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    };
+    if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
+
+    await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
     if (peerConnected && dataChannel?.readyState === 'open') {
-      dataChannel.send(JSON.stringify({ type: 'message', text }));
+      dataChannel.send(JSON.stringify({ type: 'message', text: itemPassHash ? '(protected message)' : text }));
     }
+    if (itemPassHash) toast('Protected message sent');
+    clearItemPasscode();
   } catch (e) {
     console.error(e);
     toast('Failed to send: ' + (e.code || e.message), true);
