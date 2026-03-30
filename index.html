@@ -234,7 +234,7 @@ input::placeholder{color:var(--text3)}
   <div class="screen active" id="screen-home">
     <div class="home-actions">
       <div class="code-input-row">
-        <input type="text" id="join-code" placeholder="Enter box code" maxlength="20" autocomplete="off" spellcheck="false">
+        <input type="text" id="join-code" placeholder="Enter box code" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text">
         <button class="btn-primary" onclick="joinBox()">Open</button>
       </div>
       <div class="or-divider">or</div>
@@ -250,7 +250,7 @@ input::placeholder{color:var(--text3)}
     <button class="back-btn" onclick="showScreen('screen-home')">&#8592; Back</button>
     <div class="field-group">
       <label>Box Code</label>
-      <input type="text" id="create-code" placeholder="Custom name or leave blank for random" maxlength="20" autocomplete="off" spellcheck="false">
+      <input type="text" id="create-code" placeholder="Custom name or leave blank for random" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text">
       <div class="field-hint">Letters, numbers, hyphens. Leave empty for a random 6-digit code.</div>
     </div>
     <div class="field-group">
@@ -492,14 +492,33 @@ async function createBox() {
 
 // ===================== JOIN BOX =====================
 async function joinBox(codeOverride) {
-  let code = codeOverride || document.getElementById('join-code').value.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
+  let raw = codeOverride || document.getElementById('join-code').value;
+  // Strip spaces and convert to lowercase
+  let code = raw.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
   if (!code) { toast('Enter a box code'); return; }
 
+  // If the code looks like an auto-formatted number (e.g. "123-456"), strip dashes
+  const stripped = code.replace(/-/g, '');
+  const isAutoFormatted = /^\d+$/.test(stripped) && code.includes('-');
+
   try {
-    const doc = await db.collection('boxes').doc(code).get();
+    let doc = await db.collection('boxes').doc(code).get();
+
+    // If not found and it looks auto-formatted, try without dashes
+    if (!doc.exists && isAutoFormatted) {
+      code = stripped;
+      doc = await db.collection('boxes').doc(code).get();
+    }
+
+    // Still not found? Try with dashes stripped regardless
+    if (!doc.exists && code !== stripped) {
+      code = stripped;
+      doc = await db.collection('boxes').doc(code).get();
+    }
+
     if (!doc.exists) {
       toast('Mailbox "' + code + '" not found', true);
-      console.warn('Firestore lookup: boxes/' + code + ' → not found. Make sure Firestore DB exists and the box was created.');
+      console.warn('Firestore lookup: boxes/' + code + ' → not found.');
       return;
     }
 
