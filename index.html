@@ -19,7 +19,6 @@
 html,body{height:100%;font-family:var(--font-sans);background:var(--bg);color:var(--text);overflow-x:hidden}
 body{display:flex;flex-direction:column;align-items:center}
 
-/* === GLOBAL PATTERNS === */
 button{font-family:var(--font-sans);cursor:pointer;border:none;outline:none;transition:all .2s}
 input{font-family:var(--font-mono);background:var(--surface2);border:1px solid var(--surface3);color:var(--text);padding:12px 16px;border-radius:var(--radius-sm);outline:none;transition:border .2s}
 input:focus{border-color:var(--beam)}
@@ -47,10 +46,8 @@ input::placeholder{color:var(--text3)}
 }
 .btn-icon:hover{border-color:var(--beam);color:var(--beam)}
 
-/* === LAYOUT === */
 .app{width:100%;max-width:520px;padding:20px;min-height:100vh;display:flex;flex-direction:column}
 
-/* === HEADER === */
 .header{text-align:center;padding:40px 0 30px;position:relative}
 .logo{font-family:var(--font-mono);font-size:32px;font-weight:700;letter-spacing:6px;
   background:linear-gradient(135deg,var(--beam),var(--accent));-webkit-background-clip:text;
@@ -59,12 +56,10 @@ input::placeholder{color:var(--text3)}
   width:40px;height:2px;background:var(--beam);border-radius:2px;opacity:.6}
 .tagline{color:var(--text2);font-size:13px;margin-top:14px;letter-spacing:.5px}
 
-/* === SCREEN TRANSITIONS === */
 .screen{display:none;flex-direction:column;gap:20px;animation:fadeUp .35s ease}
 .screen.active{display:flex}
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
-/* === HOME SCREEN === */
 .home-actions{display:flex;flex-direction:column;gap:14px;margin-top:10px}
 .code-input-row{display:flex;gap:10px}
 .code-input-row input{flex:1;font-size:16px;text-align:center;letter-spacing:4px;text-transform:uppercase}
@@ -80,7 +75,6 @@ input::placeholder{color:var(--text3)}
 .option-card h3{font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
 .option-card p{color:var(--text2);font-size:13px;line-height:1.5}
 
-/* === CREATE BOX SCREEN === */
 .field-group{display:flex;flex-direction:column;gap:6px}
 .field-group label{font-size:12px;color:var(--text2);letter-spacing:.5px;text-transform:uppercase;font-weight:600}
 .field-group input{width:100%}
@@ -95,7 +89,6 @@ input::placeholder{color:var(--text3)}
 .passcode-toggle input:checked+.toggle-track::after{transform:translateX(20px);background:#fff}
 .passcode-toggle span{font-size:14px;color:var(--text2)}
 
-/* === MAILBOX SCREEN === */
 .box-header{
   background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius);
   padding:20px;position:relative;overflow:hidden;
@@ -108,17 +101,26 @@ input::placeholder{color:var(--text3)}
 .box-meta{display:flex;justify-content:center;gap:16px;margin-top:12px}
 .box-meta span{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px}
 
+.box-actions{display:flex;justify-content:center;gap:8px;margin-top:12px}
+.btn-invite{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--surface2);border:1px solid var(--surface3);
+  color:var(--text2);padding:8px 16px;border-radius:var(--radius-sm);
+  font-size:12px;font-weight:600;letter-spacing:.3px;
+}
+.btn-invite:hover{border-color:var(--beam);color:var(--beam)}
+.btn-invite svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
 .connection-status{
   display:flex;align-items:center;gap:8px;padding:10px 16px;
   border-radius:var(--radius-sm);font-size:13px;
 }
-.connection-status.peer-connected{background:var(--success);background:rgba(74,222,128,.1);color:var(--success);border:1px solid rgba(74,222,128,.2)}
+.connection-status.peer-connected{background:rgba(74,222,128,.1);color:var(--success);border:1px solid rgba(74,222,128,.2)}
 .connection-status.peer-disconnected{background:rgba(136,136,160,.08);color:var(--text2);border:1px solid var(--surface3)}
 .status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .peer-connected .status-dot{background:var(--success);box-shadow:0 0 8px var(--success)}
 .peer-disconnected .status-dot{background:var(--text3)}
 
-/* === DROP ZONE === */
 .drop-zone{
   border:2px dashed var(--surface3);border-radius:var(--radius);padding:40px 20px;
   text-align:center;transition:all .25s;cursor:pointer;position:relative;
@@ -129,12 +131,10 @@ input::placeholder{color:var(--text3)}
 .drop-zone-hint{font-size:11px;color:var(--text3);margin-top:6px}
 .drop-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
 
-/* === MESSAGE INPUT === */
 .msg-input-row{display:flex;gap:8px}
 .msg-input-row input{flex:1;font-family:var(--font-sans);font-size:14px}
 .msg-input-row button{padding:12px 20px}
 
-/* === ITEMS LIST === */
 .items-section h4{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:600}
 .item-list{display:flex;flex-direction:column;gap:8px}
 .item-card{
@@ -151,7 +151,6 @@ input::placeholder{color:var(--text3)}
 
 .empty-state{text-align:center;padding:30px;color:var(--text3);font-size:13px}
 
-/* === PROGRESS === */
 .upload-progress{
   background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius-sm);
   padding:12px 16px;
@@ -160,7 +159,6 @@ input::placeholder{color:var(--text3)}
 .progress-bar-fill{height:100%;background:linear-gradient(90deg,var(--beam),var(--accent));border-radius:2px;transition:width .3s;width:0%}
 .progress-text{font-size:12px;color:var(--text2);display:flex;justify-content:space-between}
 
-/* === PASSCODE MODAL === */
 .modal-overlay{
   position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(8px);
   display:none;align-items:center;justify-content:center;z-index:100;padding:20px;
@@ -175,30 +173,35 @@ input::placeholder{color:var(--text3)}
 .modal .field-group{margin-bottom:16px}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end}
 
-/* === TOAST === */
 .toast{
   position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(80px);
   background:var(--surface2);border:1px solid var(--surface3);border-radius:var(--radius);
   padding:12px 20px;font-size:13px;color:var(--text);z-index:200;
-  transition:transform .3s ease;pointer-events:none;
+  transition:transform .3s ease;pointer-events:none;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis;
 }
 .toast.show{transform:translateX(-50%) translateY(0)}
+.toast.error{border-color:var(--warn);color:var(--warn)}
 
-/* === BACK BUTTON === */
 .back-btn{
   display:inline-flex;align-items:center;gap:6px;color:var(--text2);font-size:13px;
   background:none;padding:8px 0;margin-bottom:4px;
 }
 .back-btn:hover{color:var(--beam)}
 
-/* === STORAGE METER === */
 .storage-meter{margin-top:8px}
 .storage-meter-label{font-size:11px;color:var(--text3);display:flex;justify-content:space-between;margin-bottom:4px}
 .storage-meter-track{height:4px;background:var(--surface3);border-radius:2px;overflow:hidden}
 .storage-meter-fill{height:100%;background:var(--beam);border-radius:2px;transition:width .3s}
 .storage-meter-fill.warning{background:var(--warn)}
 
-/* === BG EFFECT === */
+.error-banner{
+  background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.25);
+  border-radius:var(--radius-sm);padding:12px 16px;font-size:13px;color:var(--warn);
+  line-height:1.5;display:none;
+}
+.error-banner.active{display:block}
+.error-banner code{font-family:var(--font-mono);font-size:11px;background:rgba(255,107,107,.15);padding:2px 6px;border-radius:4px}
+
 .bg-glow{
   position:fixed;top:-200px;left:50%;transform:translateX(-50%);
   width:600px;height:600px;border-radius:50%;
@@ -216,6 +219,8 @@ input::placeholder{color:var(--text3)}
     <div class="logo">BEAM</div>
     <div class="tagline">Secure file mailbox &middot; WebRTC + Cloud</div>
   </div>
+
+  <div class="error-banner" id="error-banner"></div>
 
   <!-- HOME SCREEN -->
   <div class="screen active" id="screen-home">
@@ -273,14 +278,23 @@ input::placeholder{color:var(--text3)}
         </div>
         <div class="storage-meter-track"><div class="storage-meter-fill" id="storage-fill"></div></div>
       </div>
+      <div class="box-actions">
+        <button class="btn-invite" onclick="inviteToBox()">
+          <svg viewBox="0 0 24 24"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+          Invite to mailbox
+        </button>
+        <button class="btn-invite" onclick="copyBoxCode()">
+          <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          Copy code
+        </button>
+      </div>
     </div>
 
     <div class="connection-status peer-disconnected" id="peer-status">
       <div class="status-dot"></div>
-      <span id="peer-status-text">No peer connected</span>
+      <span id="peer-status-text">No peer connected — using cloud storage</span>
     </div>
 
-    <!-- Drop Zone -->
     <div class="drop-zone" id="drop-zone">
       <input type="file" multiple onchange="handleFiles(this.files)">
       <div class="drop-zone-icon">&#x1f4c1;</div>
@@ -288,7 +302,6 @@ input::placeholder{color:var(--text3)}
       <div class="drop-zone-hint">Max 50 MB per mailbox</div>
     </div>
 
-    <!-- Upload Progress -->
     <div class="upload-progress" id="upload-progress" style="display:none">
       <div class="progress-text">
         <span id="progress-name">Uploading...</span>
@@ -297,17 +310,15 @@ input::placeholder{color:var(--text3)}
       <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-fill"></div></div>
     </div>
 
-    <!-- Message Input -->
     <div class="msg-input-row">
       <input type="text" id="msg-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendMessage()">
       <button class="btn-secondary" onclick="sendMessage()">Send</button>
     </div>
 
-    <!-- Items -->
     <div class="items-section">
       <h4>Contents</h4>
       <div class="item-list" id="item-list">
-        <div class="empty-state" id="empty-state">This mailbox is empty</div>
+        <div class="empty-state">This mailbox is empty</div>
       </div>
     </div>
   </div>
@@ -328,7 +339,24 @@ input::placeholder{color:var(--text3)}
   </div>
 </div>
 
-<!-- Toast -->
+<!-- Delete Confirmation Modal -->
+<div class="modal-overlay" id="delete-modal">
+  <div class="modal">
+    <h3>&#x1f5d1; Delete item?</h3>
+    <p id="delete-modal-desc">Are you sure you want to remove this?</p>
+    <div class="modal-actions" id="delete-confirm-actions">
+      <button class="btn-secondary" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn-primary" style="background:var(--warn);color:#fff" onclick="showDeleteScope()">Yes, remove</button>
+    </div>
+    <div class="modal-actions" id="delete-scope-actions" style="display:none;flex-direction:column;gap:10px">
+      <p style="font-size:13px;color:var(--text2);margin:0">Where should it be removed from?</p>
+      <button class="btn-secondary" onclick="confirmDelete('local')" style="width:100%;text-align:center">Hide on this device only</button>
+      <button class="btn-primary" onclick="confirmDelete('cloud')" style="width:100%;background:var(--warn);color:#fff;text-align:center">Delete from mailbox for everyone</button>
+      <button class="btn-secondary" onclick="closeDeleteModal()" style="width:100%;text-align:center;color:var(--text3)">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <!-- Firebase -->
@@ -337,9 +365,6 @@ input::placeholder{color:var(--text3)}
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 
 <script>
-// ============================================================
-//  CONFIGURATION — Replace with your Firebase config
-// ============================================================
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyDxLI57pgS9WX1ekMerbcx8M6aVeWacpy0",
   authDomain: "miscellaneous-117e9.firebaseapp.com",
@@ -349,81 +374,76 @@ const FIREBASE_CONFIG = {
   appId: "1:514858431339:web:81e6ed4edec6ade8e3922e"
 };
 
-const MAX_BOX_BYTES = 50 * 1024 * 1024; // 50 MB
+const MAX_BOX_BYTES = 50 * 1024 * 1024;
 
-// ============================================================
-//  FIREBASE INIT
-// ============================================================
+// Firebase init
 const app = firebase.initializeApp(FIREBASE_CONFIG);
 const db = firebase.firestore();
-const storage = firebase.storage();
+let storageReady = false;
+let storage;
+try { storage = firebase.storage(); storageReady = true; } catch(e) { console.warn('Storage init failed:', e); }
 
-// ============================================================
-//  STATE
-// ============================================================
-let currentBox = null;     // { code, hasPasscode, passcodeHash, createdAt }
-let currentPasscode = null;
-let unsubItems = null;     // Firestore listener
-let peerConnection = null;
-let dataChannel = null;
-let peerConnected = false;
-let pendingJoinCode = null;
+// Test Firestore on load
+db.collection('_ping').doc('test').set({ t: Date.now() })
+  .then(() => console.log('Firestore: connected and writable'))
+  .catch(e => {
+    console.error('Firestore test write failed:', e);
+    const msg = e.code === 'permission-denied'
+      ? 'Firestore rules are blocking writes. In Firebase console, go to Firestore → Rules and set: <code>allow read, write: if true;</code>'
+      : e.code === 'not-found' || (e.message && e.message.includes('NOT_FOUND'))
+        ? 'No Firestore database found. Go to Firebase console → Firestore Database → Create database → Start in test mode.'
+        : 'Firestore error: <code>' + (e.code || e.message) + '</code>';
+    showError(msg);
+  });
 
-// ============================================================
-//  SCREENS
-// ============================================================
+// State
+let currentBox = null, currentPasscode = null, unsubItems = null;
+let peerConnection = null, dataChannel = null, peerConnected = false, pendingJoinCode = null;
+
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
 
-// ============================================================
-//  TOAST
-// ============================================================
-function toast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2500);
+function showError(html) {
+  const el = document.getElementById('error-banner');
+  el.innerHTML = html;
+  el.classList.add('active');
 }
 
-// ============================================================
-//  PASSCODE HASHING (SHA-256)
-// ============================================================
+function toast(msg, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => { el.className = 'toast'; }, 3000);
+}
+
 async function hashPasscode(passcode) {
   const enc = new TextEncoder().encode(passcode);
   const buf = await crypto.subtle.digest('SHA-256', enc);
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ============================================================
-//  TOGGLE PASSCODE FIELD
-// ============================================================
 function togglePasscodeField() {
-  const on = document.getElementById('passcode-toggle').checked;
-  document.getElementById('passcode-field').style.display = on ? 'flex' : 'none';
+  document.getElementById('passcode-field').style.display = document.getElementById('passcode-toggle').checked ? 'flex' : 'none';
 }
 
-// ============================================================
-//  CREATE BOX
-// ============================================================
+// ===================== CREATE BOX =====================
 async function createBox() {
   let code = document.getElementById('create-code').value.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
   if (!code) code = String(Math.floor(100000 + Math.random() * 900000));
 
   const usePasscode = document.getElementById('passcode-toggle').checked;
   const passcode = document.getElementById('create-passcode').value;
-
   if (usePasscode && !passcode) { toast('Please enter a passcode'); return; }
 
   try {
     const docRef = db.collection('boxes').doc(code);
     const existing = await docRef.get();
-    if (existing.exists) { toast('That code is already taken'); return; }
+    if (existing.exists) { toast('That code is already taken', true); return; }
 
     const boxData = {
-      code,
-      hasPasscode: usePasscode,
+      code, hasPasscode: usePasscode,
       passcodeHash: usePasscode ? await hashPasscode(passcode) : null,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       totalBytes: 0
@@ -435,22 +455,23 @@ async function createBox() {
     enterMailbox(code);
     toast('Mailbox created!');
   } catch (e) {
-    console.error(e);
-    toast('Error creating mailbox');
+    console.error('Create box error:', e);
+    toast('Error: ' + (e.code || e.message), true);
   }
 }
 
-// ============================================================
-//  JOIN BOX
-// ============================================================
-async function joinBox() {
-  let code = document.getElementById('join-code').value.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
+// ===================== JOIN BOX =====================
+async function joinBox(codeOverride) {
+  let code = codeOverride || document.getElementById('join-code').value.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
   if (!code) { toast('Enter a box code'); return; }
 
   try {
-    const docRef = db.collection('boxes').doc(code);
-    const doc = await docRef.get();
-    if (!doc.exists) { toast('Mailbox not found'); return; }
+    const doc = await db.collection('boxes').doc(code).get();
+    if (!doc.exists) {
+      toast('Mailbox "' + code + '" not found', true);
+      console.warn('Firestore lookup: boxes/' + code + ' → not found. Make sure Firestore DB exists and the box was created.');
+      return;
+    }
 
     const data = doc.data();
     currentBox = { ...data, createdAt: data.createdAt?.toDate() };
@@ -463,8 +484,8 @@ async function joinBox() {
       enterMailbox(code);
     }
   } catch (e) {
-    console.error(e);
-    toast('Error opening mailbox');
+    console.error('Join box error:', e);
+    toast('Error: ' + (e.code || e.message), true);
   }
 }
 
@@ -472,10 +493,7 @@ async function submitPasscode() {
   const input = document.getElementById('modal-passcode').value;
   if (!input) return;
   const hash = await hashPasscode(input);
-  if (hash !== currentBox.passcodeHash) {
-    toast('Wrong passcode');
-    return;
-  }
+  if (hash !== currentBox.passcodeHash) { toast('Wrong passcode', true); return; }
   currentPasscode = input;
   closePasscodeModal();
   enterMailbox(pendingJoinCode);
@@ -487,9 +505,7 @@ function closePasscodeModal() {
   pendingJoinCode = null;
 }
 
-// ============================================================
-//  ENTER MAILBOX
-// ============================================================
+// ===================== ENTER / LEAVE =====================
 function enterMailbox(code) {
   document.getElementById('box-code-display').textContent = code.toUpperCase();
   document.getElementById('box-lock-icon').innerHTML = currentBox.hasPasscode ? '&#x1f512; Locked' : '&#x1f513; Open';
@@ -497,6 +513,10 @@ function enterMailbox(code) {
   listenToItems(code);
   initWebRTC(code);
   updateStorageMeter();
+  // Shareable URL
+  const url = new URL(window.location);
+  url.searchParams.set('box', code);
+  history.replaceState(null, '', url);
 }
 
 function leaveBox() {
@@ -506,69 +526,121 @@ function leaveBox() {
   currentBox = null;
   currentPasscode = null;
   showScreen('screen-home');
+  const url = new URL(window.location);
+  url.searchParams.delete('box');
+  history.replaceState(null, '', url);
 }
 
-// ============================================================
-//  LISTEN TO ITEMS (real-time)
-// ============================================================
+// ===================== INVITE / COPY =====================
+function inviteToBox() {
+  if (!currentBox) return;
+  const url = window.location.origin + window.location.pathname + '?box=' + encodeURIComponent(currentBox.code);
+  if (navigator.share) {
+    navigator.share({ title: 'Beam Mailbox', text: 'Join my Beam mailbox:', url }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText('Join my Beam mailbox: ' + url).then(() => toast('Invite link copied!')).catch(() => toast('Could not copy'));
+  }
+}
+
+function copyBoxCode() {
+  if (!currentBox) return;
+  navigator.clipboard.writeText(currentBox.code.toUpperCase()).then(() => toast('Code copied!')).catch(() => toast('Could not copy'));
+}
+
+// ===================== LOCAL HIDE TRACKING =====================
+function getHiddenItems() {
+  try { return JSON.parse(localStorage.getItem('beam_hidden_' + currentBox?.code) || '[]'); } catch { return []; }
+}
+function hideItemLocally(itemId) {
+  const hidden = getHiddenItems();
+  if (!hidden.includes(itemId)) { hidden.push(itemId); localStorage.setItem('beam_hidden_' + currentBox.code, JSON.stringify(hidden)); }
+}
+
+// ===================== LISTEN TO ITEMS =====================
 function listenToItems(code) {
   if (unsubItems) unsubItems();
   const ref = db.collection('boxes').doc(code).collection('items').orderBy('createdAt', 'asc');
   unsubItems = ref.onSnapshot(snap => {
     const list = document.getElementById('item-list');
-    const empty = document.getElementById('empty-state');
     list.innerHTML = '';
-
-    if (snap.empty) {
-      list.appendChild(empty);
-      return;
-    }
-
+    const hidden = getHiddenItems();
+    let visibleCount = 0;
     snap.forEach(doc => {
-      const item = { id: doc.id, ...doc.data() };
-      list.appendChild(renderItem(item));
+      if (hidden.includes(doc.id)) return;
+      list.appendChild(renderItem({ id: doc.id, ...doc.data() }));
+      visibleCount++;
     });
-
+    if (visibleCount === 0) list.innerHTML = '<div class="empty-state">This mailbox is empty</div>';
     updateStorageMeter();
+  }, err => {
+    console.error('Listener error:', err);
+    toast('Error loading items: ' + err.code, true);
   });
 }
 
-// ============================================================
-//  RENDER ITEM
-// ============================================================
 function renderItem(item) {
   const div = document.createElement('div');
   div.className = 'item-card';
-
   if (item.type === 'message') {
-    div.innerHTML = `
-      <div class="item-icon">&#x1f4ac;</div>
-      <div class="item-info">
-        <div class="item-msg">${escapeHtml(item.text)}</div>
-        <div class="item-meta">${timeAgo(item.createdAt?.toDate())}</div>
-      </div>
-      <div class="item-actions">
-        <button class="btn-icon" title="Delete" onclick="deleteItem('${item.id}')">&#x1f5d1;</button>
-      </div>`;
+    div.innerHTML = `<div class="item-icon">&#x1f4ac;</div>
+      <div class="item-info"><div class="item-msg">${escapeHtml(item.text)}</div><div class="item-meta">${timeAgo(item.createdAt?.toDate())}</div></div>
+      <div class="item-actions"><button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','message')">&#x1f5d1;</button></div>`;
   } else {
-    const sizeStr = formatBytes(item.size || 0);
-    div.innerHTML = `
-      <div class="item-icon">${fileIcon(item.fileName)}</div>
-      <div class="item-info">
-        <div class="item-name">${escapeHtml(item.fileName)}</div>
-        <div class="item-meta">${sizeStr} &middot; ${timeAgo(item.createdAt?.toDate())}</div>
-      </div>
+    div.innerHTML = `<div class="item-icon">${fileIcon(item.fileName)}</div>
+      <div class="item-info"><div class="item-name">${escapeHtml(item.fileName)}</div><div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
       <div class="item-actions">
-        <button class="btn-icon" title="Download" onclick="downloadItem('${item.id}','${escapeHtml(item.fileName)}','${item.storagePath}')">&#x2b07;</button>
-        <button class="btn-icon" title="Delete" onclick="deleteItem('${item.id}','${item.storagePath}')">&#x1f5d1;</button>
+        <button class="btn-icon" title="Download" onclick="downloadItem('${item.id}')">&#x2b07;</button>
+        <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','${item.storagePath||''}','file')">&#x1f5d1;</button>
       </div>`;
   }
   return div;
 }
 
-// ============================================================
-//  FILE UPLOAD (Firebase Storage + Firestore metadata)
-// ============================================================
+// ===================== DELETE CONFIRMATION MODAL =====================
+let pendingDelete = { itemId: null, storagePath: null, type: null };
+
+function promptDelete(itemId, storagePath, type) {
+  pendingDelete = { itemId, storagePath, type };
+  const desc = type === 'message' ? 'this message' : 'this file';
+  document.getElementById('delete-modal-desc').textContent = 'Are you sure you want to remove ' + desc + '?';
+  document.getElementById('delete-confirm-actions').style.display = 'flex';
+  document.getElementById('delete-scope-actions').style.display = 'none';
+  document.getElementById('delete-modal').classList.add('active');
+}
+
+function showDeleteScope() {
+  document.getElementById('delete-confirm-actions').style.display = 'none';
+  document.getElementById('delete-scope-actions').style.display = 'flex';
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal').classList.remove('active');
+  pendingDelete = { itemId: null, storagePath: null, type: null };
+}
+
+async function confirmDelete(scope) {
+  const { itemId, storagePath } = pendingDelete;
+  closeDeleteModal();
+  if (!itemId || !currentBox) return;
+
+  if (scope === 'local') {
+    hideItemLocally(itemId);
+    // Re-trigger the listener to refresh the list
+    listenToItems(currentBox.code);
+    toast('Hidden on this device');
+  } else {
+    try {
+      const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
+      const data = d.data();
+      if (storagePath && storage) await storage.ref(storagePath).delete().catch(() => {});
+      await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).delete();
+      if (data?.size) await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(-data.size) });
+      toast('Deleted from mailbox');
+    } catch (e) { toast('Delete failed', true); }
+  }
+}
+
+// ===================== FILE UPLOAD — Always Firebase, RTC bonus =====================
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
@@ -576,288 +648,159 @@ dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.
 
 async function handleFiles(files) {
   if (!currentBox || !files.length) return;
+  if (!storageReady || !storage) { toast('File storage needs Blaze plan. Messages still work!', true); return; }
 
   for (const file of files) {
-    // Check size
-    const boxDoc = await db.collection('boxes').doc(currentBox.code).get();
-    const usedBytes = boxDoc.data()?.totalBytes || 0;
-    if (usedBytes + file.size > MAX_BOX_BYTES) {
-      toast(`Not enough space. ${formatBytes(MAX_BOX_BYTES - usedBytes)} remaining.`);
-      return;
-    }
+    let usedBytes = 0;
+    try { const d = await db.collection('boxes').doc(currentBox.code).get(); usedBytes = d.data()?.totalBytes || 0; } catch(e) {}
+    if (usedBytes + file.size > MAX_BOX_BYTES) { toast(`Not enough space. ${formatBytes(MAX_BOX_BYTES - usedBytes)} left.`, true); return; }
 
     const progressEl = document.getElementById('upload-progress');
-    const progressName = document.getElementById('progress-name');
-    const progressPct = document.getElementById('progress-pct');
-    const progressFill = document.getElementById('progress-fill');
-
     progressEl.style.display = 'block';
-    progressName.textContent = file.name;
-    progressPct.textContent = '0%';
-    progressFill.style.width = '0%';
+    document.getElementById('progress-name').textContent = file.name;
+    document.getElementById('progress-pct').textContent = '0%';
+    document.getElementById('progress-fill').style.width = '0%';
 
     const storagePath = `boxes/${currentBox.code}/${Date.now()}_${file.name}`;
-    const ref = storage.ref(storagePath);
-
     try {
-      // If peer is connected, try WebRTC first
-      if (peerConnected && dataChannel && dataChannel.readyState === 'open') {
-        sendFileViaRTC(file);
-      }
-
-      // Always upload to Firebase as the persistent copy
-      const task = ref.put(file);
+      const task = storage.ref(storagePath).put(file);
       task.on('state_changed', snap => {
         const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
-        progressPct.textContent = pct + '%';
-        progressFill.style.width = pct + '%';
+        document.getElementById('progress-pct').textContent = pct + '%';
+        document.getElementById('progress-fill').style.width = pct + '%';
       });
-
       await task;
-      const url = await ref.getDownloadURL();
+      const url = await storage.ref(storagePath).getDownloadURL();
 
       await db.collection('boxes').doc(currentBox.code).collection('items').add({
-        type: 'file',
-        fileName: file.name,
-        size: file.size,
-        mimeType: file.type,
-        storagePath,
-        downloadURL: url,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        type: 'file', fileName: file.name, size: file.size, mimeType: file.type,
+        storagePath, downloadURL: url, createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(file.size) });
 
-      // Update total bytes
-      await db.collection('boxes').doc(currentBox.code).update({
-        totalBytes: firebase.firestore.FieldValue.increment(file.size)
-      });
-
+      // RTC bonus notification
+      if (peerConnected && dataChannel?.readyState === 'open') {
+        dataChannel.send(JSON.stringify({ type: 'file-notify', fileName: file.name, size: file.size }));
+      }
       progressEl.style.display = 'none';
-      toast(`Uploaded ${file.name}`);
+      toast('Uploaded ' + file.name);
     } catch (e) {
-      console.error(e);
+      console.error('Upload error:', e);
       progressEl.style.display = 'none';
-      toast('Upload failed');
+      toast('Upload failed: ' + (e.code || e.message), true);
+      if (e.code?.includes('unauthorized')) storageReady = false;
     }
   }
 }
 
-// ============================================================
-//  SEND MESSAGE
-// ============================================================
+// ===================== SEND MESSAGE — Always Firebase, RTC bonus =====================
 async function sendMessage() {
   const input = document.getElementById('msg-input');
   const text = input.value.trim();
   if (!text || !currentBox) return;
   input.value = '';
-
   try {
-    // Send via WebRTC if connected
-    if (peerConnected && dataChannel && dataChannel.readyState === 'open') {
+    await db.collection('boxes').doc(currentBox.code).collection('items').add({
+      type: 'message', text, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    if (peerConnected && dataChannel?.readyState === 'open') {
       dataChannel.send(JSON.stringify({ type: 'message', text }));
     }
-
-    // Always persist to Firebase
-    await db.collection('boxes').doc(currentBox.code).collection('items').add({
-      type: 'message',
-      text,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
   } catch (e) {
     console.error(e);
-    toast('Failed to send message');
+    toast('Failed to send: ' + (e.code || e.message), true);
   }
 }
 
-// ============================================================
-//  DOWNLOAD / DELETE
-// ============================================================
-async function downloadItem(itemId, fileName, storagePath) {
+// ===================== DOWNLOAD / DELETE =====================
+async function downloadItem(itemId) {
   try {
-    const itemDoc = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
-    const data = itemDoc.data();
-    if (data?.downloadURL) {
-      const a = document.createElement('a');
-      a.href = data.downloadURL;
-      a.download = fileName;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+    const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
+    if (d.data()?.downloadURL) {
+      const a = document.createElement('a'); a.href = d.data().downloadURL; a.download = d.data().fileName || 'file';
+      a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
     }
-  } catch (e) {
-    console.error(e);
-    toast('Download failed');
-  }
+  } catch (e) { toast('Download failed', true); }
 }
 
-async function deleteItem(itemId, storagePath) {
-  if (!currentBox) return;
-  try {
-    // Get file size before deleting
-    const itemDoc = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
-    const data = itemDoc.data();
-
-    if (storagePath) {
-      await storage.ref(storagePath).delete().catch(() => {});
-    }
-    await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).delete();
-
-    if (data?.size) {
-      await db.collection('boxes').doc(currentBox.code).update({
-        totalBytes: firebase.firestore.FieldValue.increment(-data.size)
-      });
-    }
-
-    toast('Deleted');
-  } catch (e) {
-    console.error(e);
-    toast('Delete failed');
-  }
-}
-
-// ============================================================
-//  STORAGE METER
-// ============================================================
+// ===================== STORAGE METER =====================
 async function updateStorageMeter() {
   if (!currentBox) return;
   try {
-    const doc = await db.collection('boxes').doc(currentBox.code).get();
-    const used = doc.data()?.totalBytes || 0;
+    const d = await db.collection('boxes').doc(currentBox.code).get();
+    const used = d.data()?.totalBytes || 0;
     const pct = Math.min((used / MAX_BOX_BYTES) * 100, 100);
-
     document.getElementById('storage-used').textContent = formatBytes(used);
     document.getElementById('box-storage-text').textContent = formatBytes(used) + ' / 50 MB';
-
     const fill = document.getElementById('storage-fill');
     fill.style.width = pct + '%';
     fill.classList.toggle('warning', pct > 85);
-  } catch (e) { console.error(e); }
+  } catch (e) {}
 }
 
-// ============================================================
-//  WEBRTC — Signaling via Firestore
-// ============================================================
+// ===================== WEBRTC =====================
 async function initWebRTC(boxCode) {
   cleanupWebRTC();
-
-  const config = { iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-  ]};
-
+  const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
   peerConnection = new RTCPeerConnection(config);
   const sigRef = db.collection('boxes').doc(boxCode).collection('signaling');
 
-  // Listen for connection state
-  peerConnection.onconnectionstatechange = () => {
-    const state = peerConnection.connectionState;
-    peerConnected = state === 'connected';
-    updatePeerStatus();
-  };
-
+  peerConnection.onconnectionstatechange = () => { peerConnected = peerConnection.connectionState === 'connected'; updatePeerStatus(); };
   peerConnection.oniceconnectionstatechange = () => {
-    if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
-      peerConnected = false;
-      updatePeerStatus();
-    }
+    if (['disconnected','failed'].includes(peerConnection.iceConnectionState)) { peerConnected = false; updatePeerStatus(); }
   };
 
-  // Check if there's an existing offer to answer
-  const offerSnap = await sigRef.doc('offer').get();
+  // Check for existing offer
+  const offerSnap = await sigRef.doc('offer').get().catch(() => null);
 
-  if (offerSnap.exists && offerSnap.data()?.sdp) {
-    // Be the answerer
-    peerConnection.ondatachannel = e => {
-      dataChannel = e.channel;
-      setupDataChannel();
-    };
-
+  if (offerSnap?.exists && offerSnap.data()?.sdp) {
+    // Answer existing offer
+    peerConnection.ondatachannel = e => { dataChannel = e.channel; setupDataChannel(); };
     await peerConnection.setRemoteDescription(new RTCSessionDescription(offerSnap.data()));
-
-    peerConnection.onicecandidate = e => {
-      if (e.candidate) {
-        sigRef.collection('answerCandidates').add(e.candidate.toJSON());
-      }
-    };
-
+    peerConnection.onicecandidate = e => { if (e.candidate) sigRef.collection('answerCandidates').add(e.candidate.toJSON()); };
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
     await sigRef.doc('answer').set({ type: answer.type, sdp: answer.sdp });
-
-    // Listen for offer candidates
-    sigRef.collection('offerCandidates').onSnapshot(snap => {
-      snap.docChanges().forEach(change => {
-        if (change.type === 'added') {
-          peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
-        }
-      });
+    sigRef.collection('offerCandidates').onSnapshot(s => {
+      s.docChanges().forEach(c => { if (c.type === 'added') peerConnection.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {}); });
     });
-
   } else {
-    // Be the offerer
+    // Create offer
     dataChannel = peerConnection.createDataChannel('beam', { ordered: true });
     setupDataChannel();
-
-    peerConnection.onicecandidate = e => {
-      if (e.candidate) {
-        sigRef.collection('offerCandidates').add(e.candidate.toJSON());
-      }
-    };
-
+    peerConnection.onicecandidate = e => { if (e.candidate) sigRef.collection('offerCandidates').add(e.candidate.toJSON()); };
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     await sigRef.doc('offer').set({ type: offer.type, sdp: offer.sdp });
-
-    // Listen for answer
     sigRef.doc('answer').onSnapshot(snap => {
-      if (snap.exists && snap.data()?.sdp && peerConnection.signalingState !== 'stable') {
+      if (snap.exists && snap.data()?.sdp && peerConnection?.signalingState !== 'stable') {
         peerConnection.setRemoteDescription(new RTCSessionDescription(snap.data())).catch(() => {});
       }
     });
-
-    // Listen for answer candidates
-    sigRef.collection('answerCandidates').onSnapshot(snap => {
-      snap.docChanges().forEach(change => {
-        if (change.type === 'added') {
-          peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
-        }
-      });
+    sigRef.collection('answerCandidates').onSnapshot(s => {
+      s.docChanges().forEach(c => { if (c.type === 'added' && peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {}); });
     });
   }
 }
 
 function setupDataChannel() {
   if (!dataChannel) return;
-  dataChannel.onopen = () => { peerConnected = true; updatePeerStatus(); };
+  dataChannel.onopen = () => { peerConnected = true; updatePeerStatus(); toast('Peer connected!'); };
   dataChannel.onclose = () => { peerConnected = false; updatePeerStatus(); };
   dataChannel.onmessage = e => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'message') {
-        toast('Peer: ' + msg.text);
-      }
+      if (msg.type === 'message') toast('Peer: ' + msg.text);
+      else if (msg.type === 'file-notify') toast('Peer sent: ' + msg.fileName);
     } catch {}
   };
-}
-
-function sendFileViaRTC(file) {
-  // For RTC: just notify peer. File is persisted via Firebase.
-  if (dataChannel && dataChannel.readyState === 'open') {
-    dataChannel.send(JSON.stringify({ type: 'file-notify', fileName: file.name, size: file.size }));
-  }
 }
 
 function updatePeerStatus() {
   const el = document.getElementById('peer-status');
   const text = document.getElementById('peer-status-text');
-  if (peerConnected) {
-    el.className = 'connection-status peer-connected';
-    text.textContent = 'Peer connected — direct transfer active';
-  } else {
-    el.className = 'connection-status peer-disconnected';
-    text.textContent = 'No peer connected — using cloud storage';
-  }
+  el.className = 'connection-status ' + (peerConnected ? 'peer-connected' : 'peer-disconnected');
+  text.textContent = peerConnected ? 'Peer connected — direct transfer active' : 'No peer connected — using cloud storage';
 }
 
 function cleanupWebRTC() {
@@ -866,44 +809,27 @@ function cleanupWebRTC() {
   peerConnected = false;
 }
 
-// ============================================================
-//  HELPERS
-// ============================================================
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML;
-}
-
-function formatBytes(b) {
-  if (b < 1024) return b + ' B';
-  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-  return (b / 1048576).toFixed(1) + ' MB';
-}
-
+// ===================== HELPERS =====================
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
 function timeAgo(date) {
   if (!date) return 'just now';
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return Math.floor(s / 60) + 'm ago';
-  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-  return Math.floor(s / 86400) + 'd ago';
+  if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s/60)+'m ago';
+  if (s < 86400) return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago';
 }
-
 function fileIcon(name) {
   if (!name) return '&#x1f4c4;';
   const ext = name.split('.').pop().toLowerCase();
-  const icons = {
-    pdf: '&#x1f4d5;', doc: '&#x1f4c4;', docx: '&#x1f4c4;', txt: '&#x1f4dd;',
-    jpg: '&#x1f5bc;', jpeg: '&#x1f5bc;', png: '&#x1f5bc;', gif: '&#x1f5bc;', webp: '&#x1f5bc;', svg: '&#x1f5bc;',
-    mp4: '&#x1f3ac;', mov: '&#x1f3ac;', avi: '&#x1f3ac;', mkv: '&#x1f3ac;',
-    mp3: '&#x1f3b5;', wav: '&#x1f3b5;', flac: '&#x1f3b5;', aac: '&#x1f3b5;',
-    zip: '&#x1f4e6;', rar: '&#x1f4e6;', '7z': '&#x1f4e6;', tar: '&#x1f4e6;',
-    js: '&#x1f4bb;', py: '&#x1f4bb;', html: '&#x1f4bb;', css: '&#x1f4bb;', json: '&#x1f4bb;',
-    xlsx: '&#x1f4ca;', csv: '&#x1f4ca;',
-  };
-  return icons[ext] || '&#x1f4c4;';
+  const m = {pdf:'&#x1f4d5;',doc:'&#x1f4c4;',docx:'&#x1f4c4;',txt:'&#x1f4dd;',jpg:'&#x1f5bc;',jpeg:'&#x1f5bc;',png:'&#x1f5bc;',gif:'&#x1f5bc;',webp:'&#x1f5bc;',svg:'&#x1f5bc;',mp4:'&#x1f3ac;',mov:'&#x1f3ac;',mp3:'&#x1f3b5;',wav:'&#x1f3b5;',zip:'&#x1f4e6;',rar:'&#x1f4e6;',js:'&#x1f4bb;',py:'&#x1f4bb;',html:'&#x1f4bb;',xlsx:'&#x1f4ca;',csv:'&#x1f4ca;'};
+  return m[ext] || '&#x1f4c4;';
 }
+
+// ===================== AUTO-JOIN FROM URL =====================
+window.addEventListener('DOMContentLoaded', () => {
+  const code = new URLSearchParams(window.location.search).get('box');
+  if (code) setTimeout(() => joinBox(code.toLowerCase().replace(/[^a-z0-9\-]/g, '')), 1000);
+});
 </script>
 </body>
 </html>
