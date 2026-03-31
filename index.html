@@ -307,7 +307,7 @@ input::placeholder{color:var(--text3)}
       <input type="file" multiple onchange="handleFiles(this.files)">
       <div class="drop-zone-icon">&#x1f4c1;</div>
       <div class="drop-zone-text">Drop files here or tap to browse</div>
-      <div class="drop-zone-hint">Max 50 MB per mailbox</div>
+      <div class="drop-zone-hint">Max 700 KB per file &middot; 50 MB per mailbox</div>
     </div>
 
     <div class="upload-progress" id="upload-progress" style="display:none">
@@ -392,7 +392,6 @@ input::placeholder{color:var(--text3)}
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 
 <script>
 const FIREBASE_CONFIG = {
@@ -404,14 +403,12 @@ const FIREBASE_CONFIG = {
   appId: "1:514858431339:web:81e6ed4edec6ade8e3922e"
 };
 
-const MAX_BOX_BYTES = 50 * 1024 * 1024;
+const MAX_BOX_BYTES = 50 * 1024 * 1024; // 50 MB across all items
+const MAX_FILE_BYTES = 700 * 1024;      // ~700 KB per file (Firestore 1 MB doc limit minus overhead)
 
 // Firebase init
 const app = firebase.initializeApp(FIREBASE_CONFIG);
 const db = firebase.firestore();
-let storageReady = false;
-let storage;
-try { storage = firebase.storage(); storageReady = true; } catch(e) { console.warn('Storage init failed:', e); }
 
 // Test Firestore on load
 db.collection('_ping').doc('test').set({ t: Date.now() })
@@ -763,7 +760,6 @@ async function confirmDelete(scope) {
     try {
       const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
       const data = d.data();
-      if (storagePath && storage) await storage.ref(storagePath).delete().catch(() => {});
       await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).delete();
       if (data?.size) await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(-data.size) });
       toast('Deleted from mailbox');
@@ -771,20 +767,33 @@ async function confirmDelete(scope) {
   }
 }
 
-// ===================== FILE UPLOAD — Always Firebase, RTC bonus =====================
+// ===================== FILE UPLOAD — Firestore base64 storage =====================
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
 
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]); // strip data:...;base64, prefix
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function handleFiles(files) {
   if (!currentBox || !files.length) return;
-  if (!storageReady || !storage) { toast('File storage needs Blaze plan. Messages still work!', true); return; }
 
   const itemPass = getItemPasscode();
   const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
 
   for (const file of files) {
+    if (file.size > MAX_FILE_BYTES) {
+      toast(`${file.name} is too large (${formatBytes(file.size)}). Max is 700 KB per file.`, true);
+      continue;
+    }
+
     let usedBytes = 0;
     try { const d = await db.collection('boxes').doc(currentBox.code).get(); usedBytes = d.data()?.totalBytes || 0; } catch(e) {}
     if (usedBytes + file.size > MAX_BOX_BYTES) { toast(`Not enough space. ${formatBytes(MAX_BOX_BYTES - usedBytes)} left.`, true); return; }
@@ -792,23 +801,22 @@ async function handleFiles(files) {
     const progressEl = document.getElementById('upload-progress');
     progressEl.style.display = 'block';
     document.getElementById('progress-name').textContent = file.name;
-    document.getElementById('progress-pct').textContent = '0%';
-    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('progress-pct').textContent = 'Reading...';
+    document.getElementById('progress-fill').style.width = '30%';
 
-    const storagePath = `boxes/${currentBox.code}/${Date.now()}_${file.name}`;
     try {
-      const task = storage.ref(storagePath).put(file);
-      task.on('state_changed', snap => {
-        const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
-        document.getElementById('progress-pct').textContent = pct + '%';
-        document.getElementById('progress-fill').style.width = pct + '%';
-      });
-      await task;
-      const url = await storage.ref(storagePath).getDownloadURL();
+      const base64Data = await readFileAsBase64(file);
+
+      document.getElementById('progress-pct').textContent = 'Saving...';
+      document.getElementById('progress-fill').style.width = '70%';
 
       const itemData = {
-        type: 'file', fileName: file.name, size: file.size, mimeType: file.type,
-        storagePath, downloadURL: url, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        type: 'file',
+        fileName: file.name,
+        size: file.size,
+        mimeType: file.type || 'application/octet-stream',
+        fileData: base64Data, // stored as base64 string in Firestore
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
       };
       if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
 
@@ -818,13 +826,15 @@ async function handleFiles(files) {
       if (peerConnected && dataChannel?.readyState === 'open') {
         dataChannel.send(JSON.stringify({ type: 'file-notify', fileName: file.name, size: file.size }));
       }
-      progressEl.style.display = 'none';
+
+      document.getElementById('progress-fill').style.width = '100%';
+      document.getElementById('progress-pct').textContent = '100%';
+      setTimeout(() => { progressEl.style.display = 'none'; }, 400);
       toast('Uploaded ' + file.name + (itemPassHash ? ' (protected)' : ''));
     } catch (e) {
       console.error('Upload error:', e);
       progressEl.style.display = 'none';
       toast('Upload failed: ' + (e.code || e.message), true);
-      if (e.code?.includes('unauthorized')) storageReady = false;
     }
   }
   clearItemPasscode();
@@ -858,15 +868,31 @@ async function sendMessage() {
   }
 }
 
-// ===================== DOWNLOAD / DELETE =====================
+// ===================== DOWNLOAD =====================
 async function downloadItem(itemId) {
   try {
     const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
-    if (d.data()?.downloadURL) {
-      const a = document.createElement('a'); a.href = d.data().downloadURL; a.download = d.data().fileName || 'file';
-      a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
-    }
-  } catch (e) { toast('Download failed', true); }
+    const data = d.data();
+    if (!data?.fileData) { toast('No file data found', true); return; }
+
+    // Convert base64 back to blob
+    const byteChars = atob(data.fileData);
+    const byteArray = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([byteArray], { type: data.mimeType || 'application/octet-stream' });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = data.fileName || 'file';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    console.error('Download error:', e);
+    toast('Download failed', true);
+  }
 }
 
 // ===================== STORAGE METER =====================
@@ -973,6 +999,15 @@ function fileIcon(name) {
 
 // ===================== AUTO-JOIN FROM URL =====================
 window.addEventListener('DOMContentLoaded', () => {
+  // Real-time input sanitizer — strip dashes from numeric codes as user types
+  const joinInput = document.getElementById('join-code');
+  joinInput.addEventListener('input', () => {
+    const raw = joinInput.value;
+    const stripped = raw.replace(/[^a-zA-Z0-9\-]/g, '');
+    if (raw !== stripped) joinInput.value = stripped;
+  });
+
+  // Auto-join from URL
   const code = new URLSearchParams(window.location.search).get('box');
   if (code) setTimeout(() => joinBox(code.toLowerCase().replace(/[^a-z0-9\-]/g, '')), 1000);
 });
