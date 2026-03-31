@@ -151,6 +151,13 @@ input::placeholder{color:var(--text3)}
 
 .empty-state{text-align:center;padding:30px;color:var(--text3);font-size:13px}
 
+.pw-wrap{position:relative;display:flex;align-items:center}
+.pw-wrap input{width:100%;padding-right:44px}
+.pw-eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  width:32px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+  background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:0}
+.pw-eye:hover{color:var(--beam)}
+
 .item-card.locked{border-color:var(--accent-dim)}
 .item-card.locked .item-msg,.item-card.locked .item-name{
   filter:blur(5px);user-select:none;pointer-events:none;
@@ -262,7 +269,10 @@ input::placeholder{color:var(--text3)}
     </div>
     <div class="field-group" id="passcode-field" style="display:none">
       <label>Passcode</label>
-      <input type="password" id="create-passcode" placeholder="Enter a passcode" maxlength="64">
+      <div class="pw-wrap">
+        <input type="password" id="create-passcode" placeholder="Enter a passcode" maxlength="64">
+        <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
+      </div>
       <div class="field-hint">Anyone opening this box will need this passcode.</div>
     </div>
     <button class="btn-primary" onclick="createBox()">Create Mailbox</button>
@@ -307,7 +317,7 @@ input::placeholder{color:var(--text3)}
       <input type="file" multiple onchange="handleFiles(this.files)">
       <div class="drop-zone-icon">&#x1f4c1;</div>
       <div class="drop-zone-text">Drop files here or tap to browse</div>
-      <div class="drop-zone-hint">Max 700 KB per file &middot; 50 MB per mailbox</div>
+      <div class="drop-zone-hint">Peer connected: unlimited size &middot; Cloud only: 700 KB max</div>
     </div>
 
     <div class="upload-progress" id="upload-progress" style="display:none">
@@ -324,10 +334,11 @@ input::placeholder{color:var(--text3)}
       <button class="btn-secondary" onclick="sendMessage()">Send</button>
     </div>
     <div id="item-passcode-row" style="display:none;margin-top:-12px">
-      <div class="msg-input-row">
-        <input type="password" id="item-passcode-input" placeholder="Passcode for this item..." style="flex:1;font-size:13px">
+      <div class="pw-wrap" style="margin-bottom:4px">
+        <input type="password" id="item-passcode-input" placeholder="Passcode for this item..." style="width:100%;font-size:13px">
+        <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
       </div>
-      <div class="field-hint" style="margin-top:4px">This passcode protects the next file or message you send.</div>
+      <div class="field-hint">This passcode protects the next file or message you send.</div>
     </div>
 
     <div class="items-section">
@@ -345,7 +356,10 @@ input::placeholder{color:var(--text3)}
     <h3>&#x1f512; Passcode Required</h3>
     <p>This mailbox is protected. Enter the passcode to access it.</p>
     <div class="field-group">
-      <input type="password" id="modal-passcode" placeholder="Enter passcode" onkeydown="if(event.key==='Enter')submitPasscode()">
+      <div class="pw-wrap">
+        <input type="password" id="modal-passcode" placeholder="Enter passcode" onkeydown="if(event.key==='Enter')submitPasscode()">
+        <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closePasscodeModal()">Cancel</button>
@@ -378,7 +392,10 @@ input::placeholder{color:var(--text3)}
     <h3>&#x1f512; Item Protected</h3>
     <p>This item is passcode-protected. Enter the passcode to view it.</p>
     <div class="field-group">
-      <input type="password" id="item-unlock-passcode" placeholder="Enter item passcode" onkeydown="if(event.key==='Enter')submitItemUnlock()">
+      <div class="pw-wrap">
+        <input type="password" id="item-unlock-passcode" placeholder="Enter item passcode" onkeydown="if(event.key==='Enter')submitItemUnlock()">
+        <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeItemUnlockModal()">Cancel</button>
@@ -453,6 +470,17 @@ async function hashPasscode(passcode) {
 
 function togglePasscodeField() {
   document.getElementById('passcode-field').style.display = document.getElementById('passcode-toggle').checked ? 'flex' : 'none';
+}
+
+function togglePwVis(btn) {
+  const input = btn.parentElement.querySelector('input');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.innerHTML = '&#x1f648;'; // see-no-evil monkey (hiding)
+  } else {
+    input.type = 'password';
+    btn.innerHTML = '&#x1f441;'; // eye (showing)
+  }
 }
 
 // ===================== CREATE BOX =====================
@@ -541,8 +569,9 @@ async function submitPasscode() {
   const hash = await hashPasscode(input);
   if (hash !== currentBox.passcodeHash) { toast('Wrong passcode', true); return; }
   currentPasscode = input;
+  const code = pendingJoinCode; // save before close clears it
   closePasscodeModal();
-  enterMailbox(pendingJoinCode);
+  enterMailbox(code);
 }
 
 function closePasscodeModal() {
@@ -628,9 +657,11 @@ function renderItem(item) {
   const div = document.createElement('div');
   const isLocked = !!item.itemPasscodeHash;
   const isUnlocked = unlockedItems.has(item.id);
+  const isRTCOnly = item.sentViaRTC && !item.fileData;
   div.className = 'item-card' + (isLocked && !isUnlocked ? ' locked' : '');
 
   const lockBadge = isLocked ? `<div class="item-locked-badge">&#x1f512; Protected</div>` : '';
+  const rtcBadge = isRTCOnly ? `<div class="item-locked-badge" style="color:var(--beam);background:var(--beam-dim)">⚡ Direct</div>` : '';
 
   if (item.type === 'message') {
     const msgContent = isLocked && !isUnlocked ? '••••••••••••' : escapeHtml(item.text);
@@ -641,14 +672,19 @@ function renderItem(item) {
       <div class="item-actions">${unlockBtn}<button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','message')">&#x1f5d1;</button></div>`;
   } else {
     const nameDisplay = isLocked && !isUnlocked ? '&#x1f512; Protected file' : escapeHtml(item.fileName);
-    const downloadBtn = isLocked && !isUnlocked
-      ? `<button class="btn-icon" title="Unlock to download" onclick="promptItemUnlock('${item.id}','download')">&#x1f513;</button>`
-      : `<button class="btn-icon" title="Download" onclick="downloadItem('${item.id}')">&#x2b07;</button>`;
+    let downloadBtn;
+    if (isRTCOnly) {
+      downloadBtn = `<button class="btn-icon" title="Sent via direct transfer" style="opacity:.4;cursor:default">⚡</button>`;
+    } else if (isLocked && !isUnlocked) {
+      downloadBtn = `<button class="btn-icon" title="Unlock to download" onclick="promptItemUnlock('${item.id}','download')">&#x1f513;</button>`;
+    } else {
+      downloadBtn = `<button class="btn-icon" title="Download" onclick="downloadItem('${item.id}')">&#x2b07;</button>`;
+    }
     div.innerHTML = `<div class="item-icon">${fileIcon(item.fileName)}</div>
-      <div class="item-info"><div class="item-name">${nameDisplay}</div>${lockBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
+      <div class="item-info"><div class="item-name">${nameDisplay}</div>${lockBadge}${rtcBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
       <div class="item-actions">
         ${downloadBtn}
-        <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','${item.storagePath||''}','file')">&#x1f5d1;</button>
+        <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','file')">&#x1f5d1;</button>
       </div>`;
   }
   return div;
@@ -767,7 +803,8 @@ async function confirmDelete(scope) {
   }
 }
 
-// ===================== FILE UPLOAD — Firestore base64 storage =====================
+// ===================== FILE ROUTING — RTC first, Firestore fallback =====================
+const CHUNK_SIZE = 16384; // 16 KB chunks for WebRTC
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
@@ -776,9 +813,18 @@ dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(',')[1]); // strip data:...;base64, prefix
+    reader.onload = () => resolve(reader.result.split(',')[1]);
     reader.onerror = () => reject(new Error('Failed to read file'));
     reader.readAsDataURL(file);
+  });
+}
+
+function readFileAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
   });
 }
 
@@ -789,55 +835,177 @@ async function handleFiles(files) {
   const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
 
   for (const file of files) {
-    if (file.size > MAX_FILE_BYTES) {
-      toast(`${file.name} is too large (${formatBytes(file.size)}). Max is 700 KB per file.`, true);
-      continue;
-    }
+    const rtcReady = peerConnected && dataChannel?.readyState === 'open';
 
-    let usedBytes = 0;
-    try { const d = await db.collection('boxes').doc(currentBox.code).get(); usedBytes = d.data()?.totalBytes || 0; } catch(e) {}
-    if (usedBytes + file.size > MAX_BOX_BYTES) { toast(`Not enough space. ${formatBytes(MAX_BOX_BYTES - usedBytes)} left.`, true); return; }
-
-    const progressEl = document.getElementById('upload-progress');
-    progressEl.style.display = 'block';
-    document.getElementById('progress-name').textContent = file.name;
-    document.getElementById('progress-pct').textContent = 'Reading...';
-    document.getElementById('progress-fill').style.width = '30%';
-
-    try {
-      const base64Data = await readFileAsBase64(file);
-
-      document.getElementById('progress-pct').textContent = 'Saving...';
-      document.getElementById('progress-fill').style.width = '70%';
-
-      const itemData = {
-        type: 'file',
-        fileName: file.name,
-        size: file.size,
-        mimeType: file.type || 'application/octet-stream',
-        fileData: base64Data, // stored as base64 string in Firestore
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      };
-      if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
-
-      await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
-      await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(file.size) });
-
-      if (peerConnected && dataChannel?.readyState === 'open') {
-        dataChannel.send(JSON.stringify({ type: 'file-notify', fileName: file.name, size: file.size }));
-      }
-
-      document.getElementById('progress-fill').style.width = '100%';
-      document.getElementById('progress-pct').textContent = '100%';
-      setTimeout(() => { progressEl.style.display = 'none'; }, 400);
-      toast('Uploaded ' + file.name + (itemPassHash ? ' (protected)' : ''));
-    } catch (e) {
-      console.error('Upload error:', e);
-      progressEl.style.display = 'none';
-      toast('Upload failed: ' + (e.code || e.message), true);
+    if (rtcReady) {
+      // === RTC PATH — unlimited file size, direct to peer ===
+      await sendFileViaRTC(file, itemPassHash);
+    } else if (file.size <= MAX_FILE_BYTES) {
+      // === FIRESTORE PATH — small files when no peer ===
+      await sendFileViaFirestore(file, itemPassHash);
+    } else {
+      // === TOO LARGE, NO PEER ===
+      toast(`${file.name} (${formatBytes(file.size)}) is too large for cloud. Wait for a peer to connect for direct transfer.`, true);
     }
   }
   clearItemPasscode();
+}
+
+// ---- RTC chunked file send ----
+async function sendFileViaRTC(file, itemPassHash) {
+  const progressEl = document.getElementById('upload-progress');
+  progressEl.style.display = 'block';
+  document.getElementById('progress-name').textContent = '⚡ ' + file.name;
+  document.getElementById('progress-pct').textContent = '0%';
+  document.getElementById('progress-fill').style.width = '0%';
+
+  try {
+    const buffer = await readFileAsArrayBuffer(file);
+
+    // Send file metadata header
+    dataChannel.send(JSON.stringify({
+      type: 'file-start',
+      fileName: file.name,
+      size: file.size,
+      mimeType: file.type || 'application/octet-stream',
+      totalChunks: Math.ceil(buffer.byteLength / CHUNK_SIZE),
+      hasPasscode: !!itemPassHash,
+      itemPasscodeHash: itemPassHash || null
+    }));
+
+    // Send chunks
+    let offset = 0;
+    let chunkIndex = 0;
+    const totalChunks = Math.ceil(buffer.byteLength / CHUNK_SIZE);
+
+    const sendNextChunk = () => {
+      while (offset < buffer.byteLength) {
+        if (dataChannel.bufferedAmount > CHUNK_SIZE * 8) {
+          // Back-pressure: wait for buffer to drain
+          setTimeout(sendNextChunk, 20);
+          return;
+        }
+        const end = Math.min(offset + CHUNK_SIZE, buffer.byteLength);
+        dataChannel.send(buffer.slice(offset, end));
+        offset = end;
+        chunkIndex++;
+        const pct = Math.round((chunkIndex / totalChunks) * 100);
+        document.getElementById('progress-pct').textContent = pct + '%';
+        document.getElementById('progress-fill').style.width = pct + '%';
+      }
+      // Done
+      dataChannel.send(JSON.stringify({ type: 'file-end', fileName: file.name }));
+      progressEl.style.display = 'none';
+      toast('Sent ' + file.name + ' via direct transfer');
+
+      // Also save a reference (not the data) in Firestore so it shows in the list
+      db.collection('boxes').doc(currentBox.code).collection('items').add({
+        type: 'file', fileName: file.name, size: file.size,
+        mimeType: file.type || 'application/octet-stream',
+        sentViaRTC: true, // flag: no fileData stored, was sent directly
+        itemPasscodeHash: itemPassHash || null,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      }).catch(() => {});
+    };
+
+    sendNextChunk();
+  } catch (e) {
+    console.error('RTC send error:', e);
+    progressEl.style.display = 'none';
+    toast('Direct transfer failed: ' + e.message, true);
+  }
+}
+
+// ---- Firestore base64 send (small files) ----
+async function sendFileViaFirestore(file, itemPassHash) {
+  let usedBytes = 0;
+  try { const d = await db.collection('boxes').doc(currentBox.code).get(); usedBytes = d.data()?.totalBytes || 0; } catch(e) {}
+  if (usedBytes + file.size > MAX_BOX_BYTES) { toast(`Not enough space. ${formatBytes(MAX_BOX_BYTES - usedBytes)} left.`, true); return; }
+
+  const progressEl = document.getElementById('upload-progress');
+  progressEl.style.display = 'block';
+  document.getElementById('progress-name').textContent = '☁️ ' + file.name;
+  document.getElementById('progress-pct').textContent = 'Reading...';
+  document.getElementById('progress-fill').style.width = '30%';
+
+  try {
+    const base64Data = await readFileAsBase64(file);
+    document.getElementById('progress-pct').textContent = 'Saving...';
+    document.getElementById('progress-fill').style.width = '70%';
+
+    const itemData = {
+      type: 'file', fileName: file.name, size: file.size,
+      mimeType: file.type || 'application/octet-stream',
+      fileData: base64Data,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
+
+    await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
+    await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(file.size) });
+
+    document.getElementById('progress-fill').style.width = '100%';
+    document.getElementById('progress-pct').textContent = '100%';
+    setTimeout(() => { progressEl.style.display = 'none'; }, 400);
+    toast('Uploaded ' + file.name + (itemPassHash ? ' (protected)' : ''));
+  } catch (e) {
+    console.error('Upload error:', e);
+    progressEl.style.display = 'none';
+    toast('Upload failed: ' + (e.code || e.message), true);
+  }
+}
+
+// ===================== RTC FILE RECEIVER =====================
+let incomingFile = null; // { fileName, size, mimeType, chunks[], totalChunks, received, hasPasscode, itemPasscodeHash }
+
+function handleRTCFileStart(meta) {
+  incomingFile = {
+    fileName: meta.fileName,
+    size: meta.size,
+    mimeType: meta.mimeType,
+    totalChunks: meta.totalChunks,
+    chunks: [],
+    received: 0,
+    hasPasscode: meta.hasPasscode,
+    itemPasscodeHash: meta.itemPasscodeHash
+  };
+  // Show receive progress
+  const progressEl = document.getElementById('upload-progress');
+  progressEl.style.display = 'block';
+  document.getElementById('progress-name').textContent = '⬇️ ' + meta.fileName;
+  document.getElementById('progress-pct').textContent = '0%';
+  document.getElementById('progress-fill').style.width = '0%';
+}
+
+function handleRTCFileChunk(data) {
+  if (!incomingFile) return;
+  incomingFile.chunks.push(data);
+  incomingFile.received++;
+  const pct = Math.round((incomingFile.received / incomingFile.totalChunks) * 100);
+  document.getElementById('progress-pct').textContent = pct + '%';
+  document.getElementById('progress-fill').style.width = pct + '%';
+}
+
+function handleRTCFileEnd() {
+  if (!incomingFile) return;
+  const progressEl = document.getElementById('upload-progress');
+
+  // Assemble blob
+  const blob = new Blob(incomingFile.chunks, { type: incomingFile.mimeType });
+  const url = URL.createObjectURL(blob);
+
+  // Auto-download
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = incomingFile.fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+  progressEl.style.display = 'none';
+  toast('Received ' + incomingFile.fileName + ' (' + formatBytes(incomingFile.size) + ')');
+  incomingFile = null;
 }
 
 // ===================== SEND MESSAGE — Always Firebase, RTC bonus =====================
@@ -873,9 +1041,13 @@ async function downloadItem(itemId) {
   try {
     const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
     const data = d.data();
+
+    if (data?.sentViaRTC && !data?.fileData) {
+      toast('This file was sent directly via peer transfer and not stored in the cloud.', true);
+      return;
+    }
     if (!data?.fileData) { toast('No file data found', true); return; }
 
-    // Convert base64 back to blob
     const byteChars = atob(data.fileData);
     const byteArray = new Uint8Array(byteChars.length);
     for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
@@ -957,13 +1129,24 @@ async function initWebRTC(boxCode) {
 
 function setupDataChannel() {
   if (!dataChannel) return;
-  dataChannel.onopen = () => { peerConnected = true; updatePeerStatus(); toast('Peer connected!'); };
+  dataChannel.binaryType = 'arraybuffer';
+  dataChannel.onopen = () => { peerConnected = true; updatePeerStatus(); toast('Peer connected — direct transfer ready!'); };
   dataChannel.onclose = () => { peerConnected = false; updatePeerStatus(); };
   dataChannel.onmessage = e => {
+    // Binary data = file chunk
+    if (e.data instanceof ArrayBuffer) {
+      handleRTCFileChunk(e.data);
+      return;
+    }
+    // JSON control messages
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'message') toast('Peer: ' + msg.text);
-      else if (msg.type === 'file-notify') toast('Peer sent: ' + msg.fileName);
+      switch (msg.type) {
+        case 'message': toast('Peer: ' + msg.text); break;
+        case 'file-start': handleRTCFileStart(msg); break;
+        case 'file-end': handleRTCFileEnd(); break;
+        case 'file-notify': toast('Peer sent: ' + msg.fileName); break;
+      }
     } catch {}
   };
 }
@@ -972,7 +1155,7 @@ function updatePeerStatus() {
   const el = document.getElementById('peer-status');
   const text = document.getElementById('peer-status-text');
   el.className = 'connection-status ' + (peerConnected ? 'peer-connected' : 'peer-disconnected');
-  text.textContent = peerConnected ? 'Peer connected — direct transfer active' : 'No peer connected — using cloud storage';
+  text.textContent = peerConnected ? 'Peer connected — unlimited direct transfer' : 'No peer — cloud storage only (700 KB limit)';
 }
 
 function cleanupWebRTC() {
