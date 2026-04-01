@@ -217,6 +217,43 @@ input::placeholder{color:var(--text3)}
 .error-banner.active{display:block}
 .error-banner code{font-family:var(--font-mono);font-size:11px;background:rgba(255,107,107,.15);padding:2px 6px;border-radius:4px}
 
+/* === CALL BAR === */
+.call-bar{
+  display:none;flex-direction:column;gap:10px;padding:14px 16px;
+  border-radius:var(--radius-sm);background:var(--surface);border:1px solid var(--surface3);
+}
+.call-bar.active{display:flex}
+.call-bar.in-call{border-color:var(--success);background:rgba(74,222,128,.05)}
+.call-controls{display:flex;align-items:center;gap:8px}
+.call-btn{
+  width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:18px;border:none;cursor:pointer;transition:all .2s;flex-shrink:0;
+}
+.call-btn.call-start{background:var(--success);color:#000}
+.call-btn.call-start:hover{box-shadow:0 0 16px rgba(74,222,128,.4)}
+.call-btn.call-end{background:var(--warn);color:#fff}
+.call-btn.call-end:hover{box-shadow:0 0 16px rgba(255,107,107,.4)}
+.call-btn.call-toggle{background:var(--surface3);color:var(--text2);width:36px;height:36px;font-size:15px}
+.call-btn.call-toggle.active{background:var(--warn);color:#fff}
+.call-btn:disabled{opacity:.3;cursor:not-allowed}
+.call-status{font-size:13px;color:var(--text2);flex:1}
+.call-timer{font-family:var(--font-mono);font-size:13px;color:var(--beam)}
+
+/* === VIDEO === */
+.video-container{display:none;gap:8px;border-radius:var(--radius-sm);overflow:hidden}
+.video-container.active{display:flex}
+.video-box{position:relative;flex:1;min-height:120px;max-height:200px;background:#000;border-radius:var(--radius-sm);overflow:hidden}
+.video-box video{width:100%;height:100%;object-fit:cover}
+.video-label{position:absolute;bottom:6px;left:8px;font-size:10px;color:#fff;background:rgba(0,0,0,.6);padding:2px 8px;border-radius:8px;letter-spacing:.5px}
+
+/* === VOICE RECORD === */
+.voice-record-btn{flex-shrink:0}
+.voice-record-btn.recording{color:var(--warn) !important;border-color:var(--warn) !important;animation:pulse-rec 1s infinite}
+@keyframes pulse-rec{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,.3)}50%{box-shadow:0 0 0 8px rgba(255,107,107,0)}}
+.voice-msg-player{display:flex;align-items:center;gap:8px;width:100%}
+.voice-msg-player audio{flex:1;height:32px;border-radius:16px}
+.voice-duration{font-family:var(--font-mono);font-size:11px;color:var(--text3)}
+
 .bg-glow{
   position:fixed;top:-200px;left:50%;transform:translateX(-50%);
   width:600px;height:600px;border-radius:50%;
@@ -313,6 +350,31 @@ input::placeholder{color:var(--text3)}
       <span id="peer-status-text">No peer connected — using cloud storage</span>
     </div>
 
+    <!-- Call Bar -->
+    <div class="call-bar" id="call-bar">
+      <div class="call-controls">
+        <button class="call-btn call-start" id="btn-call-start" onclick="startCall(false)" title="Voice call">&#x1f4de;</button>
+        <button class="call-btn call-start" id="btn-video-start" onclick="startCall(true)" title="Video call" style="background:var(--beam)">&#x1f4f9;</button>
+        <span class="call-status" id="call-status">Call peer</span>
+        <span class="call-timer" id="call-timer" style="display:none">00:00</span>
+        <button class="call-btn call-toggle" id="btn-mute" onclick="toggleMute()" title="Mute" style="display:none">&#x1f507;</button>
+        <button class="call-btn call-toggle" id="btn-cam-toggle" onclick="toggleCamera()" title="Camera on/off" style="display:none">&#x1f4f7;</button>
+        <button class="call-btn call-end" id="btn-call-end" onclick="endCall()" title="End call" style="display:none">&#x1f6d1;</button>
+      </div>
+    </div>
+
+    <!-- Video Container -->
+    <div class="video-container" id="video-container">
+      <div class="video-box">
+        <video id="remote-video" autoplay playsinline></video>
+        <div class="video-label">Peer</div>
+      </div>
+      <div class="video-box" style="max-width:35%">
+        <video id="local-video" autoplay playsinline muted></video>
+        <div class="video-label">You</div>
+      </div>
+    </div>
+
     <div class="drop-zone" id="drop-zone">
       <input type="file" multiple onchange="handleFiles(this.files)">
       <div class="drop-zone-icon">&#x1f4c1;</div>
@@ -330,6 +392,7 @@ input::placeholder{color:var(--text3)}
 
     <div class="msg-input-row">
       <input type="text" id="msg-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendMessage()">
+      <button class="btn-icon voice-record-btn" id="voice-record-btn" title="Hold to record voice message" onmousedown="startVoiceRecord()" onmouseup="stopVoiceRecord()" ontouchstart="startVoiceRecord()" ontouchend="stopVoiceRecord()">&#x1f3a4;</button>
       <button class="btn-icon" id="item-lock-btn" title="Add passcode to next send" onclick="toggleItemLock()" style="flex-shrink:0">&#x1f513;</button>
       <button class="btn-secondary" onclick="sendMessage()">Send</button>
     </div>
@@ -663,7 +726,29 @@ function renderItem(item) {
   const lockBadge = isLocked ? `<div class="item-locked-badge">&#x1f512; Protected</div>` : '';
   const rtcBadge = isRTCOnly ? `<div class="item-locked-badge" style="color:var(--beam);background:var(--beam-dim)">⚡ Direct</div>` : '';
 
-  if (item.type === 'message') {
+  if (item.type === 'voice') {
+    // Voice message with audio player
+    if (isLocked && !isUnlocked) {
+      div.innerHTML = `<div class="item-icon">&#x1f3a4;</div>
+        <div class="item-info"><div class="item-msg">&#x1f512; Protected voice message</div>${lockBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
+        <div class="item-actions">
+          <button class="btn-icon" title="Unlock" onclick="promptItemUnlock('${item.id}','view')">&#x1f513;</button>
+          <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','voice')">&#x1f5d1;</button>
+        </div>`;
+    } else {
+      const audioSrc = item.fileData ? `data:${item.mimeType || 'audio/webm'};base64,${item.fileData}` : '';
+      div.innerHTML = `<div class="item-icon">&#x1f3a4;</div>
+        <div class="item-info">
+          <div class="voice-msg-player">
+            ${audioSrc ? `<audio controls preload="none" src="${audioSrc}"></audio>` : '<span style="color:var(--text3);font-size:12px">Voice (sent via RTC)</span>'}
+          </div>
+          ${lockBadge}${rtcBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div>
+        </div>
+        <div class="item-actions">
+          <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','voice')">&#x1f5d1;</button>
+        </div>`;
+    }
+  } else if (item.type === 'message') {
     const msgContent = isLocked && !isUnlocked ? '••••••••••••' : escapeHtml(item.text);
     const unlockBtn = isLocked && !isUnlocked
       ? `<button class="btn-icon" title="Unlock" onclick="promptItemUnlock('${item.id}','view')">&#x1f513;</button>` : '';
@@ -1094,6 +1179,26 @@ async function initWebRTC(boxCode) {
     if (['disconnected','failed'].includes(peerConnection.iceConnectionState)) { peerConnected = false; updatePeerStatus(); }
   };
 
+  // Handle incoming audio/video tracks
+  peerConnection.ontrack = e => {
+    const remoteVideo = document.getElementById('remote-video');
+    if (!remoteVideo.srcObject) {
+      remoteVideo.srcObject = new MediaStream();
+    }
+    remoteVideo.srcObject.addTrack(e.track);
+    // If video track, show video container
+    if (e.track.kind === 'video') {
+      document.getElementById('video-container').classList.add('active');
+    }
+    if (!inCall) {
+      // Incoming call — auto answer
+      inCall = true;
+      updateCallUI();
+      startCallTimer();
+      toast('Incoming call connected!');
+    }
+  };
+
   // Check for existing offer
   const offerSnap = await sigRef.doc('offer').get().catch(() => null);
 
@@ -1146,6 +1251,10 @@ function setupDataChannel() {
         case 'file-start': handleRTCFileStart(msg); break;
         case 'file-end': handleRTCFileEnd(); break;
         case 'file-notify': toast('Peer sent: ' + msg.fileName); break;
+        case 'call-start': toast(msg.withVideo ? 'Incoming video call...' : 'Incoming voice call...'); break;
+        case 'call-end':
+          if (inCall) { endCall(); toast('Peer ended the call'); }
+          break;
       }
     } catch {}
   };
@@ -1154,14 +1263,239 @@ function setupDataChannel() {
 function updatePeerStatus() {
   const el = document.getElementById('peer-status');
   const text = document.getElementById('peer-status-text');
+  const callBar = document.getElementById('call-bar');
   el.className = 'connection-status ' + (peerConnected ? 'peer-connected' : 'peer-disconnected');
   text.textContent = peerConnected ? 'Peer connected — unlimited direct transfer' : 'No peer — cloud storage only (700 KB limit)';
+  callBar.classList.toggle('active', peerConnected);
+  if (!peerConnected && inCall) endCall();
 }
 
 function cleanupWebRTC() {
+  if (inCall) endCall();
   if (dataChannel) { try { dataChannel.close(); } catch {} dataChannel = null; }
   if (peerConnection) { try { peerConnection.close(); } catch {} peerConnection = null; }
   peerConnected = false;
+}
+
+// ===================== VOICE / VIDEO CALL =====================
+let inCall = false;
+let localStream = null;
+let callTimerInterval = null;
+let callSeconds = 0;
+let isMuted = false;
+let isCamOff = false;
+
+async function startCall(withVideo) {
+  if (!peerConnected || !peerConnection) { toast('No peer connected', true); return; }
+  try {
+    const constraints = { audio: true, video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } : false };
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    // Add tracks to peer connection
+    localStream.getTracks().forEach(track => {
+      peerConnection.addTrack(track, localStream);
+    });
+
+    // Show local video if video call
+    if (withVideo) {
+      document.getElementById('local-video').srcObject = localStream;
+      document.getElementById('video-container').classList.add('active');
+    }
+
+    // Notify peer
+    if (dataChannel?.readyState === 'open') {
+      dataChannel.send(JSON.stringify({ type: 'call-start', withVideo }));
+    }
+
+    // Need to renegotiate after adding tracks
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    const sigRef = db.collection('boxes').doc(currentBox.code).collection('signaling');
+    await sigRef.doc('offer').set({ type: offer.type, sdp: offer.sdp });
+
+    inCall = true;
+    isMuted = false;
+    isCamOff = false;
+    updateCallUI();
+    startCallTimer();
+    toast(withVideo ? 'Video call started' : 'Voice call started');
+  } catch (e) {
+    console.error('Call error:', e);
+    if (e.name === 'NotAllowedError') {
+      toast('Microphone/camera permission denied', true);
+    } else {
+      toast('Could not start call: ' + e.message, true);
+    }
+  }
+}
+
+function endCall() {
+  // Stop all local tracks
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
+
+  // Remove senders from peer connection
+  if (peerConnection) {
+    peerConnection.getSenders().forEach(sender => {
+      if (sender.track) {
+        try { peerConnection.removeTrack(sender); } catch {}
+      }
+    });
+  }
+
+  // Clear remote video
+  const remoteVideo = document.getElementById('remote-video');
+  if (remoteVideo.srcObject) {
+    remoteVideo.srcObject.getTracks().forEach(t => t.stop());
+    remoteVideo.srcObject = null;
+  }
+  document.getElementById('local-video').srcObject = null;
+  document.getElementById('video-container').classList.remove('active');
+
+  // Notify peer
+  if (dataChannel?.readyState === 'open') {
+    dataChannel.send(JSON.stringify({ type: 'call-end' }));
+  }
+
+  inCall = false;
+  isMuted = false;
+  isCamOff = false;
+  stopCallTimer();
+  updateCallUI();
+}
+
+function toggleMute() {
+  if (!localStream) return;
+  isMuted = !isMuted;
+  localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
+  document.getElementById('btn-mute').innerHTML = isMuted ? '&#x1f507;' : '&#x1f50a;';
+  document.getElementById('btn-mute').classList.toggle('active', isMuted);
+}
+
+function toggleCamera() {
+  if (!localStream) return;
+  const videoTracks = localStream.getVideoTracks();
+  if (videoTracks.length === 0) return;
+  isCamOff = !isCamOff;
+  videoTracks.forEach(t => { t.enabled = !isCamOff; });
+  document.getElementById('btn-cam-toggle').classList.toggle('active', isCamOff);
+}
+
+function updateCallUI() {
+  const bar = document.getElementById('call-bar');
+  bar.classList.toggle('in-call', inCall);
+  document.getElementById('btn-call-start').style.display = inCall ? 'none' : 'flex';
+  document.getElementById('btn-video-start').style.display = inCall ? 'none' : 'flex';
+  document.getElementById('call-status').style.display = inCall ? 'none' : 'block';
+  document.getElementById('call-timer').style.display = inCall ? 'inline' : 'none';
+  document.getElementById('btn-mute').style.display = inCall ? 'flex' : 'none';
+  document.getElementById('btn-call-end').style.display = inCall ? 'flex' : 'none';
+  // Show camera toggle only if video tracks exist
+  const hasVideo = localStream?.getVideoTracks().length > 0;
+  document.getElementById('btn-cam-toggle').style.display = inCall && hasVideo ? 'flex' : 'none';
+}
+
+function startCallTimer() {
+  callSeconds = 0;
+  updateTimerDisplay();
+  callTimerInterval = setInterval(() => { callSeconds++; updateTimerDisplay(); }, 1000);
+}
+
+function stopCallTimer() {
+  if (callTimerInterval) { clearInterval(callTimerInterval); callTimerInterval = null; }
+  callSeconds = 0;
+}
+
+function updateTimerDisplay() {
+  const m = String(Math.floor(callSeconds / 60)).padStart(2, '0');
+  const s = String(callSeconds % 60).padStart(2, '0');
+  document.getElementById('call-timer').textContent = m + ':' + s;
+}
+
+// ===================== VOICE MESSAGES =====================
+let voiceRecorder = null;
+let voiceChunks = [];
+let voiceRecording = false;
+
+async function startVoiceRecord() {
+  if (voiceRecording) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceRecorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm' });
+    voiceChunks = [];
+    voiceRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
+    voiceRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      if (voiceChunks.length === 0) return;
+
+      const blob = new Blob(voiceChunks, { type: voiceRecorder.mimeType });
+      voiceChunks = [];
+
+      // Convert to base64 and save to Firestore
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result.split(',')[1];
+        const size = blob.size;
+
+        if (size > MAX_FILE_BYTES) {
+          // Try RTC if peer connected
+          if (peerConnected && dataChannel?.readyState === 'open') {
+            toast('Voice message too large for cloud, sending via RTC...');
+            // Send as file via RTC
+            const file = new File([blob], 'voice-message.webm', { type: blob.type });
+            await sendFileViaRTC(file, null);
+          } else {
+            toast('Voice message too large (max 700 KB for cloud)', true);
+          }
+          return;
+        }
+
+        const itemPass = getItemPasscode();
+        const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
+
+        try {
+          const itemData = {
+            type: 'voice',
+            fileName: 'voice-message.webm',
+            size,
+            mimeType: blob.type,
+            fileData: base64,
+            duration: Math.round(blob.size / 4000), // rough estimate in seconds
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+          if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
+
+          await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
+          await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
+          toast('Voice message sent');
+          clearItemPasscode();
+        } catch (e) {
+          toast('Failed to send voice message', true);
+        }
+      };
+      reader.readAsDataURL(blob);
+    };
+    voiceRecorder.start();
+    voiceRecording = true;
+    document.getElementById('voice-record-btn').classList.add('recording');
+    toast('Recording... release to send');
+  } catch (e) {
+    if (e.name === 'NotAllowedError') {
+      toast('Microphone permission denied', true);
+    } else {
+      toast('Could not record: ' + e.message, true);
+    }
+  }
+}
+
+function stopVoiceRecord() {
+  if (!voiceRecording || !voiceRecorder) return;
+  voiceRecording = false;
+  document.getElementById('voice-record-btn').classList.remove('recording');
+  voiceRecorder.stop();
+  voiceRecorder = null;
 }
 
 // ===================== HELPERS =====================
