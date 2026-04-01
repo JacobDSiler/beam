@@ -1170,28 +1170,36 @@ async function updateStorageMeter() {
 // ===================== WEBRTC =====================
 let mySessionId = null;
 let sigUnsubs = [];
-let sigBasePath = null; // 'boxes/CODE/signaling'
+let boxCode_ = null;
 
-function sigCol(name) { return db.collection(sigBasePath + '/' + name); }
-function sigDoc(name) { return db.doc(sigBasePath + '/' + name); }
+// Firestore path helpers — paths must have odd segments for collections, even for docs
+// boxes/{code}/signaling/offer = doc (4 segments) ✓
+// boxes/{code}/signaling/offer/candidates = collection (5 segments) ✓
+function sigDoc(name) { return db.doc('boxes/' + boxCode_ + '/signaling/' + name); }
+function candCol(name) { return db.collection('boxes/' + boxCode_ + '/signaling/' + name + '/candidates'); }
 
 async function cleanSignaling() {
   try {
-    for (const d of ['offer','answer']) await sigDoc(d).delete().catch(()=>{});
-    for (const c of ['offerCandidates','answerCandidates']) {
-      const snap = await sigCol(c).get().catch(()=>({docs:[]}));
-      const batch = db.batch();
-      snap.docs?.forEach(doc => batch.delete(doc.ref));
-      await batch.commit().catch(()=>{});
+    // Delete offer and answer docs
+    await sigDoc('offer').delete().catch(()=>{});
+    await sigDoc('answer').delete().catch(()=>{});
+    // Delete candidate subcollections
+    for (const parent of ['offer','answer']) {
+      const snap = await candCol(parent).get().catch(()=>({docs:[]}));
+      if (snap.docs) {
+        const batch = db.batch();
+        snap.docs.forEach(doc => batch.delete(doc.ref));
+        await batch.commit().catch(()=>{});
+      }
     }
   } catch(e) { console.log('Clean signaling:', e); }
 }
 
-async function initWebRTC(boxCode) {
+async function initWebRTC(code) {
   cleanupWebRTC();
+  boxCode_ = code;
   mySessionId = Math.random().toString(36).substring(2,10);
-  sigBasePath = 'boxes/' + boxCode + '/signaling';
-  console.log('initWebRTC, session:', mySessionId);
+  console.log('initWebRTC, session:', mySessionId, 'box:', code);
 
   const config = { iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -1230,10 +1238,11 @@ async function initWebRTC(boxCode) {
   setupDataChannel();
   peerConnection.ondatachannel = e => { console.log('Incoming data channel'); dataChannel = e.channel; setupDataChannel(); };
 
-  // ICE candidates
+  // ICE candidates go under signaling/offer/candidates
   peerConnection.onicecandidate = e => {
     if (e.candidate) {
-      sigCol('offerCandidates').add({ ...e.candidate.toJSON(), session: mySessionId }).catch(err => console.error('ICE add error:', err));
+      console.log('Sending ICE candidate');
+      candCol('offer').add({ ...e.candidate.toJSON(), session: mySessionId, ts: Date.now() }).catch(err => console.error('ICE add err:', err));
     }
   };
 
@@ -1251,13 +1260,17 @@ async function initWebRTC(boxCode) {
     console.log('Got answer from:', d.session);
     try {
       if (peerConnection.signalingState === 'have-local-offer') {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(d));
-        // Listen for their ICE candidates
-        const u = sigCol('answerCandidates').where('session', '==', d.session).onSnapshot(s => {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
+        console.log('Remote description set, listening for answer candidates');
+        // Listen for their ICE candidates (under signaling/answer/candidates)
+        const u = candCol('answer').onSnapshot(s => {
           s.docChanges().forEach(c => {
             if (c.type === 'added' && peerConnection) {
               const cd = c.doc.data();
-              peerConnection.addIceCandidate(new RTCIceCandidate({candidate:cd.candidate,sdpMid:cd.sdpMid,sdpMLineIndex:cd.sdpMLineIndex})).catch(()=>{});
+              if (cd.session !== mySessionId) {
+                console.log('Adding answer ICE candidate');
+                peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
+              }
             }
           });
         });
@@ -1282,24 +1295,29 @@ async function initWebRTC(boxCode) {
       pc2.oniceconnectionstatechange = () => {
         if (['disconnected','failed','closed'].includes(pc2.iceConnectionState)) { peerConnected = false; updatePeerStatus(); }
       };
+      // Answer candidates go under signaling/answer/candidates
       pc2.onicecandidate = e => {
         if (e.candidate) {
-          sigCol('answerCandidates').add({ ...e.candidate.toJSON(), session: mySessionId }).catch(()=>{});
+          console.log('Sending answer ICE candidate');
+          candCol('answer').add({ ...e.candidate.toJSON(), session: mySessionId, ts: Date.now() }).catch(()=>{});
         }
       };
 
-      await pc2.setRemoteDescription(new RTCSessionDescription(d));
+      await pc2.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
       const answer = await pc2.createAnswer();
       await pc2.setLocalDescription(answer);
       await sigDoc('answer').set({ type: answer.type, sdp: answer.sdp, session: mySessionId, answerTo: d.session, ts: Date.now() });
       console.log('Published answer');
 
-      // Listen for their ICE candidates
-      const u = sigCol('offerCandidates').where('session', '==', d.session).onSnapshot(s => {
+      // Listen for their offer ICE candidates
+      const u = candCol('offer').onSnapshot(s => {
         s.docChanges().forEach(c => {
           if (c.type === 'added') {
             const cd = c.doc.data();
-            pc2.addIceCandidate(new RTCIceCandidate({candidate:cd.candidate,sdpMid:cd.sdpMid,sdpMLineIndex:cd.sdpMLineIndex})).catch(()=>{});
+            if (cd.session !== mySessionId) {
+              console.log('Adding offer ICE candidate');
+              pc2.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
+            }
           }
         });
       });
@@ -1316,7 +1334,7 @@ function setupDataChannel() {
   if (!dataChannel) return;
   dataChannel.binaryType = 'arraybuffer';
   dataChannel.onopen = () => { console.log('Data channel OPEN'); peerConnected = true; updatePeerStatus(); toast('Peer connected!'); };
-  dataChannel.onclose = () => { peerConnected = false; updatePeerStatus(); };
+  dataChannel.onclose = () => { console.log('Data channel closed'); peerConnected = false; updatePeerStatus(); };
   dataChannel.onerror = e => console.error('DC error:', e);
   dataChannel.onmessage = e => {
     if (e.data instanceof ArrayBuffer) { handleRTCFileChunk(e.data); return; }
@@ -1352,7 +1370,7 @@ function cleanupWebRTC() {
   if (peerConnection) { try { peerConnection.close(); } catch {} peerConnection = null; }
   peerConnected = false;
   mySessionId = null;
-  sigBasePath = null;
+  boxCode_ = null;
 }
 
 // ===================== VOICE / VIDEO CALL =====================
