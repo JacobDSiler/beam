@@ -1171,19 +1171,16 @@ async function updateStorageMeter() {
 let mySessionId = null;
 let sigUnsubs = [];
 let boxCode_ = null;
+let isOfferer = false; // track our role
+let peerSessionId = null; // track who we're connected to
 
-// Firestore path helpers — paths must have odd segments for collections, even for docs
-// boxes/{code}/signaling/offer = doc (4 segments) ✓
-// boxes/{code}/signaling/offer/candidates = collection (5 segments) ✓
 function sigDoc(name) { return db.doc('boxes/' + boxCode_ + '/signaling/' + name); }
 function candCol(name) { return db.collection('boxes/' + boxCode_ + '/signaling/' + name + '/candidates'); }
 
 async function cleanSignaling() {
   try {
-    // Delete offer and answer docs
     await sigDoc('offer').delete().catch(()=>{});
     await sigDoc('answer').delete().catch(()=>{});
-    // Delete candidate subcollections
     for (const parent of ['offer','answer']) {
       const snap = await candCol(parent).get().catch(()=>({docs:[]}));
       if (snap.docs) {
@@ -1193,6 +1190,33 @@ async function cleanSignaling() {
       }
     }
   } catch(e) { console.log('Clean signaling:', e); }
+}
+
+function createPeerConnection(config) {
+  const pc = new RTCPeerConnection(config);
+
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    console.log('RTC state:', s);
+    peerConnected = s === 'connected';
+    updatePeerStatus();
+  };
+  pc.oniceconnectionstatechange = () => {
+    const s = pc.iceConnectionState;
+    console.log('ICE state:', s);
+    if (['disconnected','failed','closed'].includes(s)) { peerConnected = false; updatePeerStatus(); }
+  };
+  pc.ontrack = e => {
+    console.log('Got remote track:', e.track.kind);
+    const rv = document.getElementById('remote-video');
+    if (!rv.srcObject) rv.srcObject = new MediaStream();
+    rv.srcObject.addTrack(e.track);
+    if (e.track.kind === 'video') document.getElementById('video-container').classList.add('active');
+    if (!inCall) { inCall = true; updateCallUI(); startCallTimer(); toast('Call connected!'); }
+  };
+  pc.ondatachannel = e => { console.log('Incoming data channel'); dataChannel = e.channel; setupDataChannel(); };
+
+  return pc;
 }
 
 async function initWebRTC(code) {
@@ -1207,127 +1231,117 @@ async function initWebRTC(code) {
     { urls: 'stun:stun2.l.google.com:19302' }
   ]};
 
-  peerConnection = new RTCPeerConnection(config);
-
-  peerConnection.onconnectionstatechange = () => {
-    const s = peerConnection?.connectionState;
-    console.log('RTC state:', s);
-    peerConnected = s === 'connected';
-    updatePeerStatus();
-  };
-  peerConnection.oniceconnectionstatechange = () => {
-    const s = peerConnection?.iceConnectionState;
-    console.log('ICE state:', s);
-    if (['disconnected','failed','closed'].includes(s)) { peerConnected = false; updatePeerStatus(); }
-  };
-
-  peerConnection.ontrack = e => {
-    console.log('Got remote track:', e.track.kind);
-    const rv = document.getElementById('remote-video');
-    if (!rv.srcObject) rv.srcObject = new MediaStream();
-    rv.srcObject.addTrack(e.track);
-    if (e.track.kind === 'video') document.getElementById('video-container').classList.add('active');
-    if (!inCall) { inCall = true; updateCallUI(); startCallTimer(); toast('Call connected!'); }
-  };
-
-  // Clean old signaling
   await cleanSignaling();
 
-  // Create data channel
-  dataChannel = peerConnection.createDataChannel('beam', { ordered: true });
-  setupDataChannel();
-  peerConnection.ondatachannel = e => { console.log('Incoming data channel'); dataChannel = e.channel; setupDataChannel(); };
+  peerConnection = createPeerConnection(config);
 
-  // ICE candidates go under signaling/offer/candidates
+  // ICE candidates
   peerConnection.onicecandidate = e => {
     if (e.candidate) {
-      console.log('Sending ICE candidate');
-      candCol('offer').add({ ...e.candidate.toJSON(), session: mySessionId, ts: Date.now() }).catch(err => console.error('ICE add err:', err));
+      const col = isOfferer ? 'offer' : 'answer';
+      candCol(col).add({ ...e.candidate.toJSON(), session: mySessionId, ts: Date.now() }).catch(err => console.error('ICE err:', err));
     }
   };
 
-  // Create and publish offer
+  // Create data channel and offer
+  dataChannel = peerConnection.createDataChannel('beam', { ordered: true });
+  setupDataChannel();
+  isOfferer = true;
+
   const offer = await peerConnection.createOffer();
   await peerConnection.setLocalDescription(offer);
   await sigDoc('offer').set({ type: offer.type, sdp: offer.sdp, session: mySessionId, ts: Date.now() });
   console.log('Published offer');
 
-  // Watch for answer
+  // === WATCH FOR ANSWER ===
   const unsubAns = sigDoc('answer').onSnapshot(async snap => {
     if (!snap.exists || !peerConnection) return;
     const d = snap.data();
     if (!d?.sdp || d.answerTo !== mySessionId) return;
+    // Ignore if we already have this peer set up
+    if (peerSessionId === d.session && peerConnection.remoteDescription) return;
+
     console.log('Got answer from:', d.session);
+    peerSessionId = d.session;
     try {
-      if (peerConnection.signalingState === 'have-local-offer') {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
-        console.log('Remote description set, listening for answer candidates');
-        // Listen for their ICE candidates (under signaling/answer/candidates)
-        const u = candCol('answer').onSnapshot(s => {
-          s.docChanges().forEach(c => {
-            if (c.type === 'added' && peerConnection) {
-              const cd = c.doc.data();
-              if (cd.session !== mySessionId) {
-                console.log('Adding answer ICE candidate');
-                peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
-              }
-            }
-          });
-        });
-        sigUnsubs.push(u);
-      }
-    } catch(e) { console.error('Set answer error:', e); }
+      await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
+      console.log('Remote description set');
+    } catch(e) {
+      console.error('Set answer error:', e);
+    }
   });
   sigUnsubs.push(unsubAns);
 
-  // Watch for new offers from other peers
+  // Listen for answer ICE candidates
+  const unsubAnsCand = candCol('answer').onSnapshot(s => {
+    s.docChanges().forEach(c => {
+      if (c.type === 'added' && peerConnection) {
+        const cd = c.doc.data();
+        if (cd.session !== mySessionId) {
+          peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
+        }
+      }
+    });
+  });
+  sigUnsubs.push(unsubAnsCand);
+
+  // === WATCH FOR OFFERS FROM OTHER PEERS ===
   const unsubOff = sigDoc('offer').onSnapshot(async snap => {
     if (!snap.exists || !peerConnection) return;
     const d = snap.data();
     if (!d?.sdp || d.session === mySessionId) return;
-    console.log('Got offer from peer:', d.session);
+
+    // Is this a renegotiation from our existing peer, or a new peer?
+    if (peerSessionId === d.session && peerConnected) {
+      // RENEGOTIATION — same peer added media tracks, handle on existing PC
+      console.log('Renegotiation offer from existing peer');
+      try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        await sigDoc('answer').set({ type: answer.type, sdp: answer.sdp, session: mySessionId, answerTo: d.session, ts: Date.now() });
+        console.log('Sent renegotiation answer');
+      } catch(e) { console.error('Renegotiation error:', e); }
+      return;
+    }
+
+    // NEW PEER — answer their offer
+    console.log('Got offer from new peer:', d.session);
+    peerSessionId = d.session;
+    isOfferer = false;
+
+    const pc2 = createPeerConnection(config);
+    pc2.onicecandidate = e => {
+      if (e.candidate) {
+        candCol('answer').add({ ...e.candidate.toJSON(), session: mySessionId, ts: Date.now() }).catch(()=>{});
+      }
+    };
 
     try {
-      const pc2 = new RTCPeerConnection(config);
-      pc2.ontrack = peerConnection.ontrack;
-      pc2.ondatachannel = e => { dataChannel = e.channel; setupDataChannel(); };
-      pc2.onconnectionstatechange = () => { peerConnected = pc2.connectionState === 'connected'; updatePeerStatus(); };
-      pc2.oniceconnectionstatechange = () => {
-        if (['disconnected','failed','closed'].includes(pc2.iceConnectionState)) { peerConnected = false; updatePeerStatus(); }
-      };
-      // Answer candidates go under signaling/answer/candidates
-      pc2.onicecandidate = e => {
-        if (e.candidate) {
-          console.log('Sending answer ICE candidate');
-          candCol('answer').add({ ...e.candidate.toJSON(), session: mySessionId, ts: Date.now() }).catch(()=>{});
-        }
-      };
-
       await pc2.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
       const answer = await pc2.createAnswer();
       await pc2.setLocalDescription(answer);
       await sigDoc('answer').set({ type: answer.type, sdp: answer.sdp, session: mySessionId, answerTo: d.session, ts: Date.now() });
-      console.log('Published answer');
-
-      // Listen for their offer ICE candidates
-      const u = candCol('offer').onSnapshot(s => {
-        s.docChanges().forEach(c => {
-          if (c.type === 'added') {
-            const cd = c.doc.data();
-            if (cd.session !== mySessionId) {
-              console.log('Adding offer ICE candidate');
-              pc2.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
-            }
-          }
-        });
-      });
-      sigUnsubs.push(u);
+      console.log('Published answer to new peer');
 
       try { peerConnection.close(); } catch {}
       peerConnection = pc2;
     } catch(e) { console.error('Answer offer error:', e); }
   });
   sigUnsubs.push(unsubOff);
+
+  // Listen for offer ICE candidates
+  const unsubOffCand = candCol('offer').onSnapshot(s => {
+    s.docChanges().forEach(c => {
+      if (c.type === 'added' && peerConnection) {
+        const cd = c.doc.data();
+        if (cd.session !== mySessionId) {
+          peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
+        }
+      }
+    });
+  });
+  sigUnsubs.push(unsubOffCand);
 }
 
 function setupDataChannel() {
@@ -1371,6 +1385,8 @@ function cleanupWebRTC() {
   peerConnected = false;
   mySessionId = null;
   boxCode_ = null;
+  peerSessionId = null;
+  isOfferer = false;
 }
 
 // ===================== VOICE / VIDEO CALL =====================
@@ -1403,10 +1419,12 @@ async function startCall(withVideo) {
       dataChannel.send(JSON.stringify({ type: 'call-start', withVideo }));
     }
 
-    // Need to renegotiate after adding tracks
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    await sigDoc('offer').set({ type: offer.type, sdp: offer.sdp, session: mySessionId, ts: Date.now() });
+    // Renegotiate after adding tracks
+    const newOffer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(newOffer);
+    // Always publish as offer with our session — the other side will detect
+    // it as renegotiation from an existing peer and handle it on the same PC
+    await sigDoc('offer').set({ type: newOffer.type, sdp: newOffer.sdp, session: mySessionId, ts: Date.now() });
 
     inCall = true;
     isMuted = false;
