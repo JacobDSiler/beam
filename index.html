@@ -392,7 +392,7 @@ input::placeholder{color:var(--text3)}
 
     <div class="msg-input-row">
       <input type="text" id="msg-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendMessage()">
-      <button class="btn-icon voice-record-btn" id="voice-record-btn" title="Hold to record voice message" onmousedown="startVoiceRecord()" onmouseup="stopVoiceRecord()" ontouchstart="startVoiceRecord()" ontouchend="stopVoiceRecord()">&#x1f3a4;</button>
+      <button class="btn-icon voice-record-btn" id="voice-record-btn" title="Hold to record voice message" onclick="toggleVoiceRecord()">&#x1f3a4;</button>
       <button class="btn-icon" id="item-lock-btn" title="Add passcode to next send" onclick="toggleItemLock()" style="flex-shrink:0">&#x1f513;</button>
       <button class="btn-secondary" onclick="sendMessage()">Send</button>
     </div>
@@ -1168,82 +1168,146 @@ async function updateStorageMeter() {
 }
 
 // ===================== WEBRTC =====================
+let mySessionId = null;
+let sigUnsubs = [];
+
+async function cleanSignaling(sigRef) {
+  try {
+    for (const d of ['offer','answer']) await sigRef.doc(d).delete().catch(()=>{});
+    for (const c of ['offerCandidates','answerCandidates']) {
+      const snap = await sigRef.collection(c).get().catch(()=>({docs:[]}));
+      const batch = db.batch();
+      snap.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit().catch(()=>{});
+    }
+    // Also clean session-specific candidate collections
+    // (we can't enumerate subcollections, but old ones expire naturally)
+  } catch(e) { console.log('Clean signaling:', e); }
+}
+
 async function initWebRTC(boxCode) {
   cleanupWebRTC();
-  const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+  mySessionId = Math.random().toString(36).substring(2,10);
+  console.log('initWebRTC, session:', mySessionId);
+
+  const config = { iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
+  ]};
+
   peerConnection = new RTCPeerConnection(config);
   const sigRef = db.collection('boxes').doc(boxCode).collection('signaling');
 
-  peerConnection.onconnectionstatechange = () => { peerConnected = peerConnection.connectionState === 'connected'; updatePeerStatus(); };
+  peerConnection.onconnectionstatechange = () => {
+    const s = peerConnection?.connectionState;
+    console.log('RTC state:', s);
+    peerConnected = s === 'connected';
+    updatePeerStatus();
+  };
   peerConnection.oniceconnectionstatechange = () => {
-    if (['disconnected','failed'].includes(peerConnection.iceConnectionState)) { peerConnected = false; updatePeerStatus(); }
+    const s = peerConnection?.iceConnectionState;
+    console.log('ICE state:', s);
+    if (['disconnected','failed','closed'].includes(s)) { peerConnected = false; updatePeerStatus(); }
   };
 
-  // Handle incoming audio/video tracks
   peerConnection.ontrack = e => {
-    const remoteVideo = document.getElementById('remote-video');
-    if (!remoteVideo.srcObject) {
-      remoteVideo.srcObject = new MediaStream();
-    }
-    remoteVideo.srcObject.addTrack(e.track);
-    // If video track, show video container
-    if (e.track.kind === 'video') {
-      document.getElementById('video-container').classList.add('active');
-    }
-    if (!inCall) {
-      // Incoming call — auto answer
-      inCall = true;
-      updateCallUI();
-      startCallTimer();
-      toast('Incoming call connected!');
-    }
+    console.log('Got remote track:', e.track.kind);
+    const rv = document.getElementById('remote-video');
+    if (!rv.srcObject) rv.srcObject = new MediaStream();
+    rv.srcObject.addTrack(e.track);
+    if (e.track.kind === 'video') document.getElementById('video-container').classList.add('active');
+    if (!inCall) { inCall = true; updateCallUI(); startCallTimer(); toast('Call connected!'); }
   };
 
-  // Check for existing offer
-  const offerSnap = await sigRef.doc('offer').get().catch(() => null);
+  // Clean old signaling first
+  await cleanSignaling(sigRef);
 
-  if (offerSnap?.exists && offerSnap.data()?.sdp) {
-    // Answer existing offer
-    peerConnection.ondatachannel = e => { dataChannel = e.channel; setupDataChannel(); };
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(offerSnap.data()));
-    peerConnection.onicecandidate = e => { if (e.candidate) sigRef.collection('answerCandidates').add(e.candidate.toJSON()); };
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-    await sigRef.doc('answer').set({ type: answer.type, sdp: answer.sdp });
-    sigRef.collection('offerCandidates').onSnapshot(s => {
-      s.docChanges().forEach(c => { if (c.type === 'added') peerConnection.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {}); });
-    });
-  } else {
-    // Create offer
-    dataChannel = peerConnection.createDataChannel('beam', { ordered: true });
-    setupDataChannel();
-    peerConnection.onicecandidate = e => { if (e.candidate) sigRef.collection('offerCandidates').add(e.candidate.toJSON()); };
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    await sigRef.doc('offer').set({ type: offer.type, sdp: offer.sdp });
-    sigRef.doc('answer').onSnapshot(snap => {
-      if (snap.exists && snap.data()?.sdp && peerConnection?.signalingState !== 'stable') {
-        peerConnection.setRemoteDescription(new RTCSessionDescription(snap.data())).catch(() => {});
+  // Create data channel
+  dataChannel = peerConnection.createDataChannel('beam', { ordered: true });
+  setupDataChannel();
+  peerConnection.ondatachannel = e => { console.log('Incoming data channel'); dataChannel = e.channel; setupDataChannel(); };
+
+  // ICE candidates go to session-specific collection
+  peerConnection.onicecandidate = e => {
+    if (e.candidate) sigRef.collection('cand_' + mySessionId).add(e.candidate.toJSON()).catch(()=>{});
+  };
+
+  // Create offer
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  await sigRef.doc('offer').set({ type: offer.type, sdp: offer.sdp, session: mySessionId, ts: Date.now() });
+  console.log('Published offer');
+
+  // Watch for answer to our offer
+  const unsubAns = sigRef.doc('answer').onSnapshot(async snap => {
+    if (!snap.exists || !peerConnection) return;
+    const d = snap.data();
+    if (!d?.sdp || d.answerTo !== mySessionId) return;
+    console.log('Got answer for our offer');
+    try {
+      if (peerConnection.signalingState === 'have-local-offer') {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(d));
+        // Listen for their ICE candidates
+        const u = sigRef.collection('cand_' + d.session).onSnapshot(s => {
+          s.docChanges().forEach(c => {
+            if (c.type === 'added' && peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(()=>{});
+          });
+        });
+        sigUnsubs.push(u);
       }
-    });
-    sigRef.collection('answerCandidates').onSnapshot(s => {
-      s.docChanges().forEach(c => { if (c.type === 'added' && peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {}); });
-    });
-  }
+    } catch(e) { console.error('Set answer error:', e); }
+  });
+  sigUnsubs.push(unsubAns);
+
+  // Watch for new offers from other peers
+  const unsubOff = sigRef.doc('offer').onSnapshot(async snap => {
+    if (!snap.exists || !peerConnection) return;
+    const d = snap.data();
+    if (!d?.sdp || d.session === mySessionId) return;
+    console.log('Got offer from peer:', d.session);
+
+    try {
+      const pc2 = new RTCPeerConnection(config);
+      pc2.ontrack = peerConnection.ontrack;
+      pc2.ondatachannel = e => { dataChannel = e.channel; setupDataChannel(); };
+      pc2.onconnectionstatechange = () => { peerConnected = pc2.connectionState === 'connected'; updatePeerStatus(); };
+      pc2.oniceconnectionstatechange = () => {
+        if (['disconnected','failed','closed'].includes(pc2.iceConnectionState)) { peerConnected = false; updatePeerStatus(); }
+      };
+      pc2.onicecandidate = e => {
+        if (e.candidate) sigRef.collection('cand_' + mySessionId).add(e.candidate.toJSON()).catch(()=>{});
+      };
+
+      await pc2.setRemoteDescription(new RTCSessionDescription(d));
+      const answer = await pc2.createAnswer();
+      await pc2.setLocalDescription(answer);
+      await sigRef.doc('answer').set({ type: answer.type, sdp: answer.sdp, session: mySessionId, answerTo: d.session, ts: Date.now() });
+      console.log('Published answer');
+
+      // Listen for their candidates
+      const u = sigRef.collection('cand_' + d.session).onSnapshot(s => {
+        s.docChanges().forEach(c => {
+          if (c.type === 'added') pc2.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(()=>{});
+        });
+      });
+      sigUnsubs.push(u);
+
+      try { peerConnection.close(); } catch {}
+      peerConnection = pc2;
+    } catch(e) { console.error('Answer offer error:', e); }
+  });
+  sigUnsubs.push(unsubOff);
 }
 
 function setupDataChannel() {
   if (!dataChannel) return;
   dataChannel.binaryType = 'arraybuffer';
-  dataChannel.onopen = () => { peerConnected = true; updatePeerStatus(); toast('Peer connected — direct transfer ready!'); };
+  dataChannel.onopen = () => { console.log('Data channel OPEN'); peerConnected = true; updatePeerStatus(); toast('Peer connected!'); };
   dataChannel.onclose = () => { peerConnected = false; updatePeerStatus(); };
+  dataChannel.onerror = e => console.error('DC error:', e);
   dataChannel.onmessage = e => {
-    // Binary data = file chunk
-    if (e.data instanceof ArrayBuffer) {
-      handleRTCFileChunk(e.data);
-      return;
-    }
-    // JSON control messages
+    if (e.data instanceof ArrayBuffer) { handleRTCFileChunk(e.data); return; }
     try {
       const msg = JSON.parse(e.data);
       switch (msg.type) {
@@ -1252,9 +1316,7 @@ function setupDataChannel() {
         case 'file-end': handleRTCFileEnd(); break;
         case 'file-notify': toast('Peer sent: ' + msg.fileName); break;
         case 'call-start': toast(msg.withVideo ? 'Incoming video call...' : 'Incoming voice call...'); break;
-        case 'call-end':
-          if (inCall) { endCall(); toast('Peer ended the call'); }
-          break;
+        case 'call-end': if (inCall) { endCall(); toast('Peer ended the call'); } break;
       }
     } catch {}
   };
@@ -1272,9 +1334,12 @@ function updatePeerStatus() {
 
 function cleanupWebRTC() {
   if (inCall) endCall();
+  sigUnsubs.forEach(fn => { try { fn(); } catch {} });
+  sigUnsubs = [];
   if (dataChannel) { try { dataChannel.close(); } catch {} dataChannel = null; }
   if (peerConnection) { try { peerConnection.close(); } catch {} peerConnection = null; }
   peerConnected = false;
+  mySessionId = null;
 }
 
 // ===================== VOICE / VIDEO CALL =====================
@@ -1419,83 +1484,78 @@ let voiceRecorder = null;
 let voiceChunks = [];
 let voiceRecording = false;
 
-async function startVoiceRecord() {
+function toggleVoiceRecord() {
+  if (voiceRecording) {
+    stopVoiceRecording();
+  } else {
+    startVoiceRecording();
+  }
+}
+
+async function startVoiceRecording() {
   if (voiceRecording) return;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    voiceRecorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm' });
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    voiceRecorder = new MediaRecorder(stream, { mimeType });
     voiceChunks = [];
     voiceRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
     voiceRecorder.onstop = async () => {
       stream.getTracks().forEach(t => t.stop());
       if (voiceChunks.length === 0) return;
-
-      const blob = new Blob(voiceChunks, { type: voiceRecorder.mimeType });
+      const blob = new Blob(voiceChunks, { type: mimeType });
       voiceChunks = [];
-
-      // Convert to base64 and save to Firestore
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = reader.result.split(',')[1];
-        const size = blob.size;
-
-        if (size > MAX_FILE_BYTES) {
-          // Try RTC if peer connected
-          if (peerConnected && dataChannel?.readyState === 'open') {
-            toast('Voice message too large for cloud, sending via RTC...');
-            // Send as file via RTC
-            const file = new File([blob], 'voice-message.webm', { type: blob.type });
-            await sendFileViaRTC(file, null);
-          } else {
-            toast('Voice message too large (max 700 KB for cloud)', true);
-          }
-          return;
-        }
-
-        const itemPass = getItemPasscode();
-        const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
-
-        try {
-          const itemData = {
-            type: 'voice',
-            fileName: 'voice-message.webm',
-            size,
-            mimeType: blob.type,
-            fileData: base64,
-            duration: Math.round(blob.size / 4000), // rough estimate in seconds
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-          };
-          if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
-
-          await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
-          await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
-          toast('Voice message sent');
-          clearItemPasscode();
-        } catch (e) {
-          toast('Failed to send voice message', true);
-        }
-      };
-      reader.readAsDataURL(blob);
+      await saveVoiceMessage(blob);
     };
     voiceRecorder.start();
     voiceRecording = true;
     document.getElementById('voice-record-btn').classList.add('recording');
-    toast('Recording... release to send');
+    toast('Recording... tap mic again to send');
   } catch (e) {
-    if (e.name === 'NotAllowedError') {
-      toast('Microphone permission denied', true);
-    } else {
-      toast('Could not record: ' + e.message, true);
-    }
+    if (e.name === 'NotAllowedError') toast('Microphone permission denied', true);
+    else toast('Could not record: ' + e.message, true);
   }
 }
 
-function stopVoiceRecord() {
+function stopVoiceRecording() {
   if (!voiceRecording || !voiceRecorder) return;
   voiceRecording = false;
   document.getElementById('voice-record-btn').classList.remove('recording');
-  voiceRecorder.stop();
+  try { voiceRecorder.stop(); } catch {}
   voiceRecorder = null;
+}
+
+async function saveVoiceMessage(blob) {
+  const size = blob.size;
+  if (size > MAX_FILE_BYTES) {
+    if (peerConnected && dataChannel?.readyState === 'open') {
+      const file = new File([blob], 'voice-message.webm', { type: blob.type });
+      await sendFileViaRTC(file, null);
+    } else {
+      toast('Voice message too large for cloud (max 700 KB)', true);
+    }
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const base64 = reader.result.split(',')[1];
+    const itemPass = getItemPasscode();
+    const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
+    try {
+      const itemData = {
+        type: 'voice', fileName: 'voice-message.webm', size,
+        mimeType: blob.type, fileData: base64,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+      if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
+      await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
+      await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
+      toast('Voice message sent');
+      clearItemPasscode();
+    } catch (e) { toast('Failed to send voice message', true); }
+  };
+  reader.readAsDataURL(blob);
 }
 
 // ===================== HELPERS =====================
