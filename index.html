@@ -502,13 +502,14 @@ input::placeholder{color:var(--text3)}
 <div class="modal-overlay" id="subscribe-modal">
   <div class="modal">
     <h3>&#x1f514; Get notified</h3>
-    <p>Receive an email when someone adds files or messages to this mailbox.</p>
+    <p>Get an email when someone adds files or messages to this mailbox.</p>
     <div class="field-group">
       <label>Email address</label>
-      <input type="email" id="subscribe-email" placeholder="you@example.com" onkeydown="if(event.key==='Enter')subscribe()">
+      <input type="email" id="subscribe-email" placeholder="you@example.com">
     </div>
+
     <div id="subscribe-status" style="display:none;margin-top:-8px">
-      <div style="font-size:12px;color:var(--success);display:flex;align-items:center;gap:6px" id="subscribe-active">
+      <div style="font-size:12px;color:var(--success);display:flex;align-items:center;gap:6px;flex-wrap:wrap" id="subscribe-active">
         &#x2705; <span id="subscribe-active-email"></span>
         <button class="btn-secondary" onclick="unsubscribe()" style="padding:4px 12px;font-size:11px;margin-left:auto">Unsubscribe</button>
       </div>
@@ -525,8 +526,6 @@ input::placeholder{color:var(--text3)}
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<!-- EmailJS -->
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 
 <script>
 const FIREBASE_CONFIG = {
@@ -767,8 +766,10 @@ function listenToItems(code) {
     const hidden = getHiddenItems();
     let visibleCount = 0;
     snap.forEach(doc => {
+      const data = doc.data();
       if (hidden.includes(doc.id)) return;
-      list.appendChild(renderItem({ id: doc.id, ...doc.data() }));
+      if (data.type === 'subscriber') return; // don't show subscriber records
+      list.appendChild(renderItem({ id: doc.id, ...data }));
       visibleCount++;
     });
     if (visibleCount === 0) list.innerHTML = '<div class="empty-state">This mailbox is empty</div>';
@@ -1896,36 +1897,28 @@ function formatRecTime() {
   return m + ':' + s;
 }
 
-// ===================== NOTIFICATIONS (EmailJS) =====================
-// ---- CONFIGURE THESE with your EmailJS account ----
-const EMAILJS_PUBLIC_KEY = 'YOUR_EMAILJS_PUBLIC_KEY';  // from EmailJS dashboard
-const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID';          // your email service
-const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';        // notification template
-// Template variables: {{to_email}}, {{box_code}}, {{item_type}}, {{item_name}}, {{box_url}}
-// ---------------------------------------------------
+// ===================== NOTIFICATIONS (Cloudflare Worker) =====================
+// ---- CONFIGURE THESE ----
+const NOTIFY_WORKER_URL = 'YOUR_WORKER_URL'; // e.g. https://beam-notify.yourname.workers.dev
+const BEAM_SECRET = 'YOUR_BEAM_SECRET';       // same secret set in the Worker
+// --------------------------
 
-let emailjsReady = false;
-try {
-  if (EMAILJS_PUBLIC_KEY !== 'YOUR_EMAILJS_PUBLIC_KEY') {
-    emailjs.init(EMAILJS_PUBLIC_KEY);
-    emailjsReady = true;
-  }
-} catch(e) { console.log('EmailJS not configured'); }
+const notifyReady = NOTIFY_WORKER_URL !== 'YOUR_WORKER_URL' && BEAM_SECRET !== 'YOUR_BEAM_SECRET';
 
 function showSubscribeModal() {
   if (!currentBox) return;
   const modal = document.getElementById('subscribe-modal');
   modal.classList.add('active');
-  // Check if already subscribed (stored locally)
-  const saved = localStorage.getItem('beam_sub_' + currentBox.code);
+  const savedData = localStorage.getItem('beam_sub_data_' + currentBox.code);
   const statusEl = document.getElementById('subscribe-status');
   const btnEl = document.getElementById('subscribe-btn');
   const emailInput = document.getElementById('subscribe-email');
-  if (saved) {
+  if (savedData) {
+    const parsed = JSON.parse(savedData);
     statusEl.style.display = 'block';
-    document.getElementById('subscribe-active-email').textContent = saved;
+    document.getElementById('subscribe-active-email').textContent = parsed.email || '';
     btnEl.style.display = 'none';
-    emailInput.value = saved;
+    emailInput.value = parsed.email || '';
   } else {
     statusEl.style.display = 'none';
     btnEl.style.display = 'inline-flex';
@@ -1939,26 +1932,28 @@ function closeSubscribeModal() {
 }
 
 async function subscribe() {
-  const email = document.getElementById('subscribe-email').value.trim();
+  const email = document.getElementById('subscribe-email').value.trim().toLowerCase();
   if (!email || !email.includes('@')) { toast('Enter a valid email', true); return; }
   if (!currentBox) return;
 
   try {
-    // Store in Firestore under the box
-    await db.collection('boxes').doc(currentBox.code).collection('subscribers').doc(email.toLowerCase()).set({
-      email: email.toLowerCase(),
+    const safeId = email.replace(/[^a-z0-9]/g, '_');
+    await db.collection('boxes').doc(currentBox.code).collection('items').doc('sub_' + safeId).set({
+      type: 'subscriber',
+      email,
       subscribedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    // Store locally so we know this browser is subscribed
-    localStorage.setItem('beam_sub_' + currentBox.code, email.toLowerCase());
+
+    localStorage.setItem('beam_sub_data_' + currentBox.code, JSON.stringify({ email }));
+    localStorage.setItem('beam_sub_' + currentBox.code, email);
+    localStorage.setItem('beam_sub_id_' + currentBox.code, 'sub_' + safeId);
     
-    // Update UI
     document.getElementById('subscribe-status').style.display = 'block';
-    document.getElementById('subscribe-active-email').textContent = email.toLowerCase();
+    document.getElementById('subscribe-active-email').textContent = email;
     document.getElementById('subscribe-btn').style.display = 'none';
     document.getElementById('btn-subscribe').innerHTML = '<svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg> Subscribed';
     
-    toast('Subscribed! You\'ll get email notifications.');
+    toast('Subscribed! Email notifications active.');
   } catch (e) {
     console.error('Subscribe error:', e);
     toast('Subscribe failed: ' + (e.code || e.message), true);
@@ -1967,12 +1962,14 @@ async function subscribe() {
 
 async function unsubscribe() {
   if (!currentBox) return;
-  const email = localStorage.getItem('beam_sub_' + currentBox.code);
-  if (!email) return;
+  const subId = localStorage.getItem('beam_sub_id_' + currentBox.code);
+  if (!subId) return;
 
   try {
-    await db.collection('boxes').doc(currentBox.code).collection('subscribers').doc(email).delete();
+    await db.collection('boxes').doc(currentBox.code).collection('items').doc(subId).delete();
     localStorage.removeItem('beam_sub_' + currentBox.code);
+    localStorage.removeItem('beam_sub_id_' + currentBox.code);
+    localStorage.removeItem('beam_sub_data_' + currentBox.code);
     
     document.getElementById('subscribe-status').style.display = 'none';
     document.getElementById('subscribe-btn').style.display = 'inline-flex';
@@ -1986,32 +1983,45 @@ async function unsubscribe() {
 }
 
 async function notifySubscribers(itemType, itemName) {
-  if (!currentBox || !emailjsReady) return;
+  if (!currentBox || !notifyReady) return;
   
-  // Don't notify yourself
-  const myEmail = localStorage.getItem('beam_sub_' + currentBox.code);
+  const myId = localStorage.getItem('beam_sub_' + currentBox.code);
   
   try {
-    const snap = await db.collection('boxes').doc(currentBox.code).collection('subscribers').get();
+    const snap = await db.collection('boxes').doc(currentBox.code).collection('items')
+      .where('type', '==', 'subscriber').get();
     if (snap.empty) return;
     
     const boxUrl = window.location.origin + window.location.pathname + '?box=' + encodeURIComponent(currentBox.code);
     
+    // Build subscriber list, excluding self
+    const subscribers = [];
     snap.forEach(doc => {
       const sub = doc.data();
-      if (sub.email === myEmail) return; // skip self
-      
-      emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-        to_email: sub.email,
-        box_code: currentBox.code.toUpperCase(),
-        item_type: itemType,
-        item_name: itemName,
-        box_url: boxUrl
-      }).then(() => {
-        console.log('Notification sent to:', sub.email);
-      }).catch(err => {
-        console.error('EmailJS send error:', err);
-      });
+      if (sub.email === myId) return;
+      if (sub.email) subscribers.push({ email: sub.email });
+    });
+    
+    if (subscribers.length === 0) return;
+    
+    // Call the Worker
+    fetch(NOTIFY_WORKER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + BEAM_SECRET
+      },
+      body: JSON.stringify({
+        subscribers,
+        boxCode: currentBox.code,
+        itemType,
+        itemName: itemName || '',
+        boxUrl
+      })
+    }).then(r => r.json()).then(data => {
+      console.log('Notifications sent:', data);
+    }).catch(err => {
+      console.error('Notify error:', err);
     });
   } catch (e) {
     console.log('Notify error:', e);
