@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Beam — Secure File Mailbox</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' stop-color='%2300e4ff'/><stop offset='100%25' stop-color='%237c5cff'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='%230a0a0f'/><path d='M55 10L25 55h20L35 90 75 42H52L65 10z' fill='url(%23g)'/></svg>">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -1207,11 +1208,31 @@ function createPeerConnection(config) {
     if (['disconnected','failed','closed'].includes(s)) { peerConnected = false; updatePeerStatus(); }
   };
   pc.ontrack = e => {
-    console.log('Got remote track:', e.track.kind);
-    const rv = document.getElementById('remote-video');
-    if (!rv.srcObject) rv.srcObject = new MediaStream();
-    rv.srcObject.addTrack(e.track);
-    if (e.track.kind === 'video') document.getElementById('video-container').classList.add('active');
+    console.log('Got remote track:', e.track.kind, 'readyState:', e.track.readyState);
+    
+    if (e.track.kind === 'audio') {
+      // Use a dedicated audio element for remote audio (not the video element)
+      let audioEl = document.getElementById('remote-audio');
+      if (!audioEl) {
+        audioEl = document.createElement('audio');
+        audioEl.id = 'remote-audio';
+        audioEl.autoplay = true;
+        audioEl.playsInline = true;
+        document.body.appendChild(audioEl);
+      }
+      if (!audioEl.srcObject) audioEl.srcObject = new MediaStream();
+      audioEl.srcObject.addTrack(e.track);
+      audioEl.play().catch(err => console.log('Audio play blocked:', err));
+    }
+    
+    if (e.track.kind === 'video') {
+      const rv = document.getElementById('remote-video');
+      if (!rv.srcObject) rv.srcObject = new MediaStream();
+      rv.srcObject.addTrack(e.track);
+      rv.play().catch(err => console.log('Video play blocked:', err));
+      document.getElementById('video-container').classList.add('active');
+    }
+    
     if (!inCall) { inCall = true; updateCallUI(); startCallTimer(); toast('Call connected!'); }
   };
   pc.ondatachannel = e => { console.log('Incoming data channel'); dataChannel = e.channel; setupDataChannel(); };
@@ -1254,14 +1275,16 @@ async function initWebRTC(code) {
   console.log('Published offer');
 
   // === WATCH FOR ANSWER ===
+  let lastAnswerTs = 0;
   const unsubAns = sigDoc('answer').onSnapshot(async snap => {
     if (!snap.exists || !peerConnection) return;
     const d = snap.data();
     if (!d?.sdp || d.answerTo !== mySessionId) return;
-    // Ignore if we already have this peer set up
-    if (peerSessionId === d.session && peerConnection.remoteDescription) return;
+    // Deduplicate by timestamp
+    if (d.ts && d.ts <= lastAnswerTs) return;
+    lastAnswerTs = d.ts || 0;
 
-    console.log('Got answer from:', d.session);
+    console.log('Got answer from:', d.session, '(renegotiation:', !!peerSessionId, ')');
     peerSessionId = d.session;
     try {
       await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
@@ -1286,10 +1309,14 @@ async function initWebRTC(code) {
   sigUnsubs.push(unsubAnsCand);
 
   // === WATCH FOR OFFERS FROM OTHER PEERS ===
+  let lastOfferTs = 0;
   const unsubOff = sigDoc('offer').onSnapshot(async snap => {
     if (!snap.exists || !peerConnection) return;
     const d = snap.data();
     if (!d?.sdp || d.session === mySessionId) return;
+    // Deduplicate by timestamp
+    if (d.ts && d.ts <= lastOfferTs) return;
+    lastOfferTs = d.ts || 0;
 
     // Is this a renegotiation from our existing peer, or a new peer?
     if (peerSessionId === d.session && peerConnected) {
@@ -1359,7 +1386,9 @@ function setupDataChannel() {
         case 'file-start': handleRTCFileStart(msg); break;
         case 'file-end': handleRTCFileEnd(); break;
         case 'file-notify': toast('Peer sent: ' + msg.fileName); break;
-        case 'call-start': toast(msg.withVideo ? 'Incoming video call...' : 'Incoming voice call...'); break;
+        case 'call-start':
+          toast(msg.withVideo ? 'Incoming video call — tap call button to join' : 'Incoming voice call — tap call button to join');
+          break;
         case 'call-end': if (inCall) { endCall(); toast('Peer ended the call'); } break;
       }
     } catch {}
@@ -1460,12 +1489,19 @@ function endCall() {
 
   // Clear remote video
   const remoteVideo = document.getElementById('remote-video');
-  if (remoteVideo.srcObject) {
+  if (remoteVideo?.srcObject) {
     remoteVideo.srcObject.getTracks().forEach(t => t.stop());
     remoteVideo.srcObject = null;
   }
   document.getElementById('local-video').srcObject = null;
   document.getElementById('video-container').classList.remove('active');
+
+  // Clear remote audio
+  const remoteAudio = document.getElementById('remote-audio');
+  if (remoteAudio?.srcObject) {
+    remoteAudio.srcObject.getTracks().forEach(t => t.stop());
+    remoteAudio.srcObject = null;
+  }
 
   // Notify peer
   if (dataChannel?.readyState === 'open') {
