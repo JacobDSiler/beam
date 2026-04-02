@@ -234,8 +234,11 @@ input::placeholder{color:var(--text3)}
 .call-btn.call-start:hover{box-shadow:0 0 16px rgba(74,222,128,.4)}
 .call-btn.call-end{background:var(--warn);color:#fff}
 .call-btn.call-end:hover{box-shadow:0 0 16px rgba(255,107,107,.4)}
-.call-btn.call-toggle{background:var(--surface3);color:var(--text2);width:36px;height:36px;font-size:15px}
-.call-btn.call-toggle.active{background:var(--warn);color:#fff}
+.call-btn.call-toggle{width:36px;height:36px;font-size:14px;font-weight:700;border-radius:50%;letter-spacing:0}
+.call-btn.mute-on{background:var(--warn);color:#fff}
+.call-btn.mute-off{background:var(--success);color:#000}
+.call-btn.cam-on{background:var(--success);color:#000}
+.call-btn.cam-off{background:var(--warn);color:#fff}
 .call-btn:disabled{opacity:.3;cursor:not-allowed}
 .call-status{font-size:13px;color:var(--text2);flex:1}
 .call-timer{font-family:var(--font-mono);font-size:13px;color:var(--beam)}
@@ -249,7 +252,7 @@ input::placeholder{color:var(--text3)}
 
 /* === VOICE RECORD === */
 .voice-record-btn{flex-shrink:0}
-.voice-record-btn.recording{color:var(--warn) !important;border-color:var(--warn) !important;animation:pulse-rec 1s infinite}
+.voice-record-btn.recording,.recording-active{color:var(--warn) !important;border-color:var(--warn) !important;animation:pulse-rec 1s infinite}
 @keyframes pulse-rec{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,.3)}50%{box-shadow:0 0 0 8px rgba(255,107,107,0)}}
 .voice-msg-player{display:flex;align-items:center;gap:8px;width:100%}
 .voice-msg-player audio{flex:1;height:32px;border-radius:16px}
@@ -337,11 +340,15 @@ input::placeholder{color:var(--text3)}
       <div class="box-actions">
         <button class="btn-invite" onclick="inviteToBox()">
           <svg viewBox="0 0 24 24"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
-          Invite to mailbox
+          Invite
         </button>
         <button class="btn-invite" onclick="copyBoxCode()">
           <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
           Copy code
+        </button>
+        <button class="btn-invite" id="btn-subscribe" onclick="showSubscribeModal()">
+          <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+          Notify me
         </button>
       </div>
     </div>
@@ -358,8 +365,8 @@ input::placeholder{color:var(--text3)}
         <button class="call-btn call-start" id="btn-video-start" onclick="startCall(true)" title="Video call" style="background:var(--beam)">&#x1f4f9;</button>
         <span class="call-status" id="call-status">Call peer</span>
         <span class="call-timer" id="call-timer" style="display:none">00:00</span>
-        <button class="call-btn call-toggle" id="btn-mute" onclick="toggleMute()" title="Mute" style="display:none">&#x1f507;</button>
-        <button class="call-btn call-toggle" id="btn-cam-toggle" onclick="toggleCamera()" title="Camera on/off" style="display:none">&#x1f4f7;</button>
+        <button class="call-btn call-toggle mute-off" id="btn-mute" onclick="toggleMute()" title="Mute" style="display:none">MIC</button>
+        <button class="call-btn call-toggle cam-on" id="btn-cam-toggle" onclick="toggleCamera()" title="Camera on/off" style="display:none">CAM</button>
         <button class="call-btn call-end" id="btn-call-end" onclick="endCall()" title="End call" style="display:none">&#x1f6d1;</button>
       </div>
     </div>
@@ -393,9 +400,32 @@ input::placeholder{color:var(--text3)}
 
     <div class="msg-input-row">
       <input type="text" id="msg-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendMessage()">
-      <button class="btn-icon voice-record-btn" id="voice-record-btn" title="Hold to record voice message" onclick="toggleVoiceRecord()">&#x1f3a4;</button>
+      <button class="btn-icon voice-record-btn" id="voice-record-btn" title="Record voice message" onclick="toggleVoiceRecord()">&#x1f3a4;</button>
+      <button class="btn-icon" id="video-record-btn" title="Record video message" onclick="toggleVideoRecord()">&#x1f4f9;</button>
       <button class="btn-icon" id="item-lock-btn" title="Add passcode to next send" onclick="toggleItemLock()" style="flex-shrink:0">&#x1f513;</button>
       <button class="btn-secondary" onclick="sendMessage()">Send</button>
+    </div>
+
+    <!-- Recording Preview -->
+    <div id="recording-preview" style="display:none">
+      <div style="background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius-sm);padding:12px 16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span id="rec-indicator" style="display:none;width:10px;height:10px;border-radius:50%;background:var(--warn);animation:pulse-rec 1s infinite;flex-shrink:0"></span>
+          <span id="rec-label" style="font-size:13px;color:var(--text2);flex:1">Preview</span>
+          <span id="rec-timer" style="font-family:var(--font-mono);font-size:13px;color:var(--beam)">00:00</span>
+        </div>
+        <div id="rec-video-preview" style="display:none;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:8px;max-height:200px">
+          <video id="rec-video-el" autoplay playsinline muted style="width:100%;display:block"></video>
+        </div>
+        <div id="rec-playback" style="display:none;margin-bottom:8px">
+          <audio id="rec-audio-playback" controls style="width:100%;height:36px" preload="auto"></audio>
+          <video id="rec-video-playback" controls playsinline style="width:100%;max-height:200px;border-radius:var(--radius-sm);display:none" preload="auto"></video>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn-secondary" onclick="cancelRecording()" style="padding:8px 16px;font-size:13px">Discard</button>
+          <button class="btn-primary" id="rec-send-btn" onclick="sendRecording()" style="padding:8px 16px;font-size:13px;display:none">Send</button>
+        </div>
+      </div>
     </div>
     <div id="item-passcode-row" style="display:none;margin-top:-12px">
       <div class="pw-wrap" style="margin-bottom:4px">
@@ -468,11 +498,35 @@ input::placeholder{color:var(--text3)}
   </div>
 </div>
 
+<!-- Subscribe Modal -->
+<div class="modal-overlay" id="subscribe-modal">
+  <div class="modal">
+    <h3>&#x1f514; Get notified</h3>
+    <p>Receive an email when someone adds files or messages to this mailbox.</p>
+    <div class="field-group">
+      <label>Email address</label>
+      <input type="email" id="subscribe-email" placeholder="you@example.com" onkeydown="if(event.key==='Enter')subscribe()">
+    </div>
+    <div id="subscribe-status" style="display:none;margin-top:-8px">
+      <div style="font-size:12px;color:var(--success);display:flex;align-items:center;gap:6px" id="subscribe-active">
+        &#x2705; <span id="subscribe-active-email"></span>
+        <button class="btn-secondary" onclick="unsubscribe()" style="padding:4px 12px;font-size:11px;margin-left:auto">Unsubscribe</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeSubscribeModal()">Close</button>
+      <button class="btn-primary" id="subscribe-btn" onclick="subscribe()">Subscribe</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<!-- EmailJS -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 
 <script>
 const FIREBASE_CONFIG = {
@@ -652,6 +706,14 @@ function enterMailbox(code) {
   listenToItems(code);
   initWebRTC(code);
   updateStorageMeter();
+  // Update subscribe button state
+  const saved = localStorage.getItem('beam_sub_' + code);
+  const subBtn = document.getElementById('btn-subscribe');
+  if (saved) {
+    subBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg> Subscribed';
+  } else {
+    subBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg> Notify me';
+  }
   // Shareable URL
   const url = new URL(window.location);
   url.searchParams.set('box', code);
@@ -727,7 +789,7 @@ function renderItem(item) {
   const lockBadge = isLocked ? `<div class="item-locked-badge">&#x1f512; Protected</div>` : '';
   const rtcBadge = isRTCOnly ? `<div class="item-locked-badge" style="color:var(--beam);background:var(--beam-dim)">⚡ Direct</div>` : '';
 
-  if (item.type === 'voice') {
+  if (item.type === 'voice' || item.type === 'video-msg') {
     // Voice message with audio player
     if (isLocked && !isUnlocked) {
       div.innerHTML = `<div class="item-icon">&#x1f3a4;</div>
@@ -983,6 +1045,7 @@ async function sendFileViaRTC(file, itemPassHash) {
       dataChannel.send(JSON.stringify({ type: 'file-end', fileName: file.name }));
       progressEl.style.display = 'none';
       toast('Sent ' + file.name + ' via direct transfer');
+      notifySubscribers('file', file.name);
 
       // Also save a reference (not the data) in Firestore so it shows in the list
       db.collection('boxes').doc(currentBox.code).collection('items').add({
@@ -1034,6 +1097,7 @@ async function sendFileViaFirestore(file, itemPassHash) {
     document.getElementById('progress-pct').textContent = '100%';
     setTimeout(() => { progressEl.style.display = 'none'; }, 400);
     toast('Uploaded ' + file.name + (itemPassHash ? ' (protected)' : ''));
+      notifySubscribers('file', file.name);
   } catch (e) {
     console.error('Upload error:', e);
     progressEl.style.display = 'none';
@@ -1115,6 +1179,7 @@ async function sendMessage() {
       dataChannel.send(JSON.stringify({ type: 'message', text: itemPassHash ? '(protected message)' : text }));
     }
     if (itemPassHash) toast('Protected message sent');
+    notifySubscribers('message', itemPassHash ? '(protected)' : text.substring(0, 50));
     clearItemPasscode();
   } catch (e) {
     console.error(e);
@@ -1519,8 +1584,10 @@ function toggleMute() {
   if (!localStream) return;
   isMuted = !isMuted;
   localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
-  document.getElementById('btn-mute').innerHTML = isMuted ? '&#x1f507;' : '&#x1f50a;';
-  document.getElementById('btn-mute').classList.toggle('active', isMuted);
+  const btn = document.getElementById('btn-mute');
+  btn.className = 'call-btn call-toggle ' + (isMuted ? 'mute-on' : 'mute-off');
+  btn.textContent = isMuted ? 'OFF' : 'MIC';
+  btn.title = isMuted ? 'Unmute' : 'Mute';
 }
 
 function toggleCamera() {
@@ -1529,7 +1596,10 @@ function toggleCamera() {
   if (videoTracks.length === 0) return;
   isCamOff = !isCamOff;
   videoTracks.forEach(t => { t.enabled = !isCamOff; });
-  document.getElementById('btn-cam-toggle').classList.toggle('active', isCamOff);
+  const btn = document.getElementById('btn-cam-toggle');
+  btn.className = 'call-btn call-toggle ' + (isCamOff ? 'cam-off' : 'cam-on');
+  btn.textContent = isCamOff ? 'OFF' : 'CAM';
+  btn.title = isCamOff ? 'Turn camera on' : 'Turn camera off';
 }
 
 function updateCallUI() {
@@ -1567,56 +1637,160 @@ function updateTimerDisplay() {
 let voiceRecorder = null;
 let voiceChunks = [];
 let voiceRecording = false;
+let recStream = null;
+let recBlob = null;
+let recType = null; // 'voice' or 'video'
+let recTimerInterval = null;
+let recSeconds = 0;
 
 function toggleVoiceRecord() {
-  if (voiceRecording) {
-    stopVoiceRecording();
-  } else {
-    startVoiceRecording();
-  }
+  if (voiceRecording && recType === 'voice') { stopRecording(); return; }
+  if (voiceRecording) { stopRecording(); } // stop any existing
+  startRecording('voice');
 }
 
-async function startVoiceRecording() {
-  if (voiceRecording) return;
+function toggleVideoRecord() {
+  if (voiceRecording && recType === 'video') { stopRecording(); return; }
+  if (voiceRecording) { stopRecording(); }
+  startRecording('video');
+}
+
+async function startRecording(type) {
+  recType = type;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
-    voiceRecorder = new MediaRecorder(stream, { mimeType });
+    const constraints = type === 'video'
+      ? { audio: true, video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } }
+      : { audio: true };
+    recStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus'
+      : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus') ? 'video/webm;codecs=vp8,opus'
+      : MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+
+    voiceRecorder = new MediaRecorder(recStream, { mimeType: type === 'video' ? mimeType : (MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm') });
     voiceChunks = [];
     voiceRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
-    voiceRecorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop());
-      if (voiceChunks.length === 0) return;
-      const blob = new Blob(voiceChunks, { type: mimeType });
+    voiceRecorder.onstop = () => {
+      recBlob = new Blob(voiceChunks, { type: voiceRecorder.mimeType });
       voiceChunks = [];
-      await saveVoiceMessage(blob);
+      showRecordingPreview();
     };
     voiceRecorder.start();
     voiceRecording = true;
-    document.getElementById('voice-record-btn').classList.add('recording');
-    toast('Recording... tap mic again to send');
+
+    // Show preview area
+    const preview = document.getElementById('recording-preview');
+    preview.style.display = 'block';
+    document.getElementById('rec-indicator').style.display = 'inline-block';
+    document.getElementById('rec-label').textContent = type === 'video' ? 'Recording video...' : 'Recording audio...';
+    document.getElementById('rec-send-btn').style.display = 'none';
+    document.getElementById('rec-playback').style.display = 'none';
+
+    // Show live camera preview for video
+    if (type === 'video') {
+      const vidPrev = document.getElementById('rec-video-preview');
+      vidPrev.style.display = 'block';
+      document.getElementById('rec-video-el').srcObject = recStream;
+    } else {
+      document.getElementById('rec-video-preview').style.display = 'none';
+    }
+
+    // Highlight the button
+    document.getElementById(type === 'video' ? 'video-record-btn' : 'voice-record-btn').classList.add('recording');
+
+    // Start timer
+    recSeconds = 0;
+    updateRecTimer();
+    recTimerInterval = setInterval(() => { recSeconds++; updateRecTimer(); }, 1000);
+
   } catch (e) {
-    if (e.name === 'NotAllowedError') toast('Microphone permission denied', true);
+    if (e.name === 'NotAllowedError') toast('Permission denied', true);
     else toast('Could not record: ' + e.message, true);
   }
 }
 
-function stopVoiceRecording() {
+function stopRecording() {
   if (!voiceRecording || !voiceRecorder) return;
   voiceRecording = false;
-  document.getElementById('voice-record-btn').classList.remove('recording');
   try { voiceRecorder.stop(); } catch {}
-  voiceRecorder = null;
+  // Stop the timer
+  if (recTimerInterval) { clearInterval(recTimerInterval); recTimerInterval = null; }
+  // Stop camera preview but keep stream for blob
+  document.getElementById('rec-video-el').srcObject = null;
+  // Remove button highlights
+  document.getElementById('voice-record-btn').classList.remove('recording');
+  document.getElementById('video-record-btn').classList.remove('recording');
 }
 
-async function saveVoiceMessage(blob) {
+function showRecordingPreview() {
+  // Stop live preview
+  document.getElementById('rec-indicator').style.display = 'none';
+  document.getElementById('rec-video-preview').style.display = 'none';
+  document.getElementById('rec-label').textContent = recType === 'video'
+    ? 'Video message (' + formatRecTime() + ')'
+    : 'Voice message (' + formatRecTime() + ')';
+
+  // Stop the stream tracks
+  if (recStream) { recStream.getTracks().forEach(t => t.stop()); recStream = null; }
+
+  // Show playback
+  const playback = document.getElementById('rec-playback');
+  playback.style.display = 'block';
+  const url = URL.createObjectURL(recBlob);
+
+  if (recType === 'video') {
+    const vidPlay = document.getElementById('rec-video-playback');
+    vidPlay.src = url;
+    vidPlay.style.display = 'block';
+    document.getElementById('rec-audio-playback').style.display = 'none';
+  } else {
+    const audPlay = document.getElementById('rec-audio-playback');
+    audPlay.src = url;
+    audPlay.style.display = 'block';
+    document.getElementById('rec-video-playback').style.display = 'none';
+  }
+
+  document.getElementById('rec-send-btn').style.display = 'inline-flex';
+}
+
+function cancelRecording() {
+  if (voiceRecording) {
+    voiceRecording = false;
+    try { voiceRecorder.stop(); } catch {}
+  }
+  if (recTimerInterval) { clearInterval(recTimerInterval); recTimerInterval = null; }
+  if (recStream) { recStream.getTracks().forEach(t => t.stop()); recStream = null; }
+  recBlob = null;
+  recType = null;
+  voiceRecorder = null;
+  document.getElementById('recording-preview').style.display = 'none';
+  document.getElementById('rec-video-el').srcObject = null;
+  document.getElementById('rec-audio-playback').src = '';
+  document.getElementById('rec-video-playback').src = '';
+  document.getElementById('voice-record-btn').classList.remove('recording');
+  document.getElementById('video-record-btn').classList.remove('recording');
+}
+
+async function sendRecording() {
+  if (!recBlob || !currentBox) return;
+  const blob = recBlob;
+  const type = recType;
+  cancelRecording(); // clean up UI
+
+  await saveRecordedMessage(blob, type);
+}
+
+async function saveRecordedMessage(blob, type) {
   const size = blob.size;
+  const ext = type === 'video' ? 'webm' : 'webm';
+  const fileName = type + '-message.' + ext;
+
   if (size > MAX_FILE_BYTES) {
     if (peerConnected && dataChannel?.readyState === 'open') {
-      const file = new File([blob], 'voice-message.webm', { type: blob.type });
+      const file = new File([blob], fileName, { type: blob.type });
       await sendFileViaRTC(file, null);
     } else {
-      toast('Voice message too large for cloud (max 700 KB)', true);
+      toast(type + ' message too large for cloud (max 700 KB)', true);
     }
     return;
   }
@@ -1628,18 +1802,154 @@ async function saveVoiceMessage(blob) {
     const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
     try {
       const itemData = {
-        type: 'voice', fileName: 'voice-message.webm', size,
+        type: type === 'video' ? 'video-msg' : 'voice',
+        fileName, size,
         mimeType: blob.type, fileData: base64,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       };
       if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
       await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
       await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
-      toast('Voice message sent');
+      toast(type === 'video' ? 'Video message sent' : 'Voice message sent');
+      notifySubscribers(type + ' message', fileName);
       clearItemPasscode();
-    } catch (e) { toast('Failed to send voice message', true); }
+    } catch (e) { toast('Failed to send ' + type + ' message', true); }
   };
   reader.readAsDataURL(blob);
+}
+
+function updateRecTimer() {
+  const m = String(Math.floor(recSeconds / 60)).padStart(2, '0');
+  const s = String(recSeconds % 60).padStart(2, '0');
+  document.getElementById('rec-timer').textContent = m + ':' + s;
+}
+
+function formatRecTime() {
+  const m = String(Math.floor(recSeconds / 60)).padStart(2, '0');
+  const s = String(recSeconds % 60).padStart(2, '0');
+  return m + ':' + s;
+}
+
+// ===================== NOTIFICATIONS (EmailJS) =====================
+// ---- CONFIGURE THESE with your EmailJS account ----
+const EMAILJS_PUBLIC_KEY = 'YOUR_EMAILJS_PUBLIC_KEY';  // from EmailJS dashboard
+const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID';          // your email service
+const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';        // notification template
+// Template variables: {{to_email}}, {{box_code}}, {{item_type}}, {{item_name}}, {{box_url}}
+// ---------------------------------------------------
+
+let emailjsReady = false;
+try {
+  if (EMAILJS_PUBLIC_KEY !== 'YOUR_EMAILJS_PUBLIC_KEY') {
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    emailjsReady = true;
+  }
+} catch(e) { console.log('EmailJS not configured'); }
+
+function showSubscribeModal() {
+  if (!currentBox) return;
+  const modal = document.getElementById('subscribe-modal');
+  modal.classList.add('active');
+  // Check if already subscribed (stored locally)
+  const saved = localStorage.getItem('beam_sub_' + currentBox.code);
+  const statusEl = document.getElementById('subscribe-status');
+  const btnEl = document.getElementById('subscribe-btn');
+  const emailInput = document.getElementById('subscribe-email');
+  if (saved) {
+    statusEl.style.display = 'block';
+    document.getElementById('subscribe-active-email').textContent = saved;
+    btnEl.style.display = 'none';
+    emailInput.value = saved;
+  } else {
+    statusEl.style.display = 'none';
+    btnEl.style.display = 'inline-flex';
+    emailInput.value = '';
+  }
+  setTimeout(() => emailInput.focus(), 100);
+}
+
+function closeSubscribeModal() {
+  document.getElementById('subscribe-modal').classList.remove('active');
+}
+
+async function subscribe() {
+  const email = document.getElementById('subscribe-email').value.trim();
+  if (!email || !email.includes('@')) { toast('Enter a valid email', true); return; }
+  if (!currentBox) return;
+
+  try {
+    // Store in Firestore under the box
+    await db.collection('boxes').doc(currentBox.code).collection('subscribers').doc(email.toLowerCase()).set({
+      email: email.toLowerCase(),
+      subscribedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    // Store locally so we know this browser is subscribed
+    localStorage.setItem('beam_sub_' + currentBox.code, email.toLowerCase());
+    
+    // Update UI
+    document.getElementById('subscribe-status').style.display = 'block';
+    document.getElementById('subscribe-active-email').textContent = email.toLowerCase();
+    document.getElementById('subscribe-btn').style.display = 'none';
+    document.getElementById('btn-subscribe').innerHTML = '<svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg> Subscribed';
+    
+    toast('Subscribed! You\'ll get email notifications.');
+  } catch (e) {
+    console.error('Subscribe error:', e);
+    toast('Subscribe failed: ' + (e.code || e.message), true);
+  }
+}
+
+async function unsubscribe() {
+  if (!currentBox) return;
+  const email = localStorage.getItem('beam_sub_' + currentBox.code);
+  if (!email) return;
+
+  try {
+    await db.collection('boxes').doc(currentBox.code).collection('subscribers').doc(email).delete();
+    localStorage.removeItem('beam_sub_' + currentBox.code);
+    
+    document.getElementById('subscribe-status').style.display = 'none';
+    document.getElementById('subscribe-btn').style.display = 'inline-flex';
+    document.getElementById('subscribe-email').value = '';
+    document.getElementById('btn-subscribe').innerHTML = '<svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg> Notify me';
+    
+    toast('Unsubscribed');
+  } catch (e) {
+    toast('Unsubscribe failed', true);
+  }
+}
+
+async function notifySubscribers(itemType, itemName) {
+  if (!currentBox || !emailjsReady) return;
+  
+  // Don't notify yourself
+  const myEmail = localStorage.getItem('beam_sub_' + currentBox.code);
+  
+  try {
+    const snap = await db.collection('boxes').doc(currentBox.code).collection('subscribers').get();
+    if (snap.empty) return;
+    
+    const boxUrl = window.location.origin + window.location.pathname + '?box=' + encodeURIComponent(currentBox.code);
+    
+    snap.forEach(doc => {
+      const sub = doc.data();
+      if (sub.email === myEmail) return; // skip self
+      
+      emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+        to_email: sub.email,
+        box_code: currentBox.code.toUpperCase(),
+        item_type: itemType,
+        item_name: itemName,
+        box_url: boxUrl
+      }).then(() => {
+        console.log('Notification sent to:', sub.email);
+      }).catch(err => {
+        console.error('EmailJS send error:', err);
+      });
+    });
+  } catch (e) {
+    console.log('Notify error:', e);
+  }
 }
 
 // ===================== HELPERS =====================
