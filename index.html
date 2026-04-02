@@ -1162,24 +1162,94 @@ function handleRTCFileEnd() {
 async function sendMessage() {
   const input = document.getElementById('msg-input');
   const text = input.value.trim();
-  if (!text || !currentBox) return;
-  input.value = '';
+  const hasMedia = !!recBlob;
+  if (!text && !hasMedia) return;
+  if (!currentBox) return;
 
   const itemPass = getItemPasscode();
   const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
 
+  // Grab media before clearing
+  let mediaBlob = null, mediaType = null;
+  if (hasMedia) {
+    mediaBlob = recBlob;
+    mediaType = recType;
+    cancelRecording(); // clean up preview UI
+  }
+  input.value = '';
+
   try {
     const itemData = {
-      type: 'message', text, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
     if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
+    if (text) itemData.text = text;
 
-    await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
-    if (peerConnected && dataChannel?.readyState === 'open') {
-      dataChannel.send(JSON.stringify({ type: 'message', text: itemPassHash ? '(protected message)' : text }));
+    // Determine type
+    if (mediaBlob && text) {
+      itemData.type = mediaType === 'video' ? 'video-msg' : 'voice';
+    } else if (mediaBlob) {
+      itemData.type = mediaType === 'video' ? 'video-msg' : 'voice';
+    } else {
+      itemData.type = 'message';
     }
-    if (itemPassHash) toast('Protected message sent');
-    notifySubscribers('message', itemPassHash ? '(protected)' : text.substring(0, 50));
+
+    // Attach media if present
+    if (mediaBlob) {
+      const size = mediaBlob.size;
+      if (size > MAX_FILE_BYTES) {
+        // Too large for Firestore — send via RTC if available
+        if (peerConnected && dataChannel?.readyState === 'open') {
+          // Send text part to Firestore, file part via RTC
+          if (text) {
+            itemData.type = 'message';
+            await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
+          }
+          const file = new File([mediaBlob], mediaType + '-message.webm', { type: mediaBlob.type });
+          await sendFileViaRTC(file, itemPassHash);
+          toast('Sent — media via direct transfer');
+          notifySubscribers('message + ' + mediaType, text?.substring(0, 30) || mediaType + ' message');
+          clearItemPasscode();
+          return;
+        } else {
+          toast('Media too large for cloud (700 KB). Send text only, or wait for peer.', true);
+          // Still send the text part
+          if (text) {
+            itemData.type = 'message';
+            delete itemData.fileData;
+            await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
+            toast('Text sent (media skipped — too large)');
+          }
+          clearItemPasscode();
+          return;
+        }
+      }
+
+      // Convert media to base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(mediaBlob);
+      });
+
+      itemData.fileData = base64;
+      itemData.fileName = mediaType + '-message.webm';
+      itemData.size = size;
+      itemData.mimeType = mediaBlob.type;
+
+      await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
+      await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
+    } else {
+      // Text only
+      await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
+    }
+
+    if (peerConnected && dataChannel?.readyState === 'open') {
+      dataChannel.send(JSON.stringify({ type: 'message', text: itemPassHash ? '(protected)' : (text || mediaType + ' message').substring(0, 50) }));
+    }
+    toast(hasMedia ? (text ? 'Message + ' + mediaType + ' sent' : mediaType.charAt(0).toUpperCase() + mediaType.slice(1) + ' message sent') : 'Message sent');
+    notifySubscribers(itemData.type, (text || mediaType + ' message').substring(0, 50));
     clearItemPasscode();
   } catch (e) {
     console.error(e);
@@ -1772,12 +1842,8 @@ function cancelRecording() {
 }
 
 async function sendRecording() {
-  if (!recBlob || !currentBox) return;
-  const blob = recBlob;
-  const type = recType;
-  cancelRecording(); // clean up UI
-
-  await saveRecordedMessage(blob, type);
+  // Just trigger the unified sendMessage which handles text + media
+  sendMessage();
 }
 
 async function saveRecordedMessage(blob, type) {
