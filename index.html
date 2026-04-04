@@ -1347,7 +1347,6 @@ function createPeerConnection(config) {
     console.log('Got remote track:', e.track.kind, 'readyState:', e.track.readyState);
     
     if (e.track.kind === 'audio') {
-      // Use a dedicated audio element for remote audio (not the video element)
       let audioEl = document.getElementById('remote-audio');
       if (!audioEl) {
         audioEl = document.createElement('audio');
@@ -1369,7 +1368,9 @@ function createPeerConnection(config) {
       document.getElementById('video-container').classList.add('active');
     }
     
-    if (!inCall) { inCall = true; updateCallUI(); startCallTimer(); toast('Call connected!'); }
+    // Don't set inCall here — let startCall/joinCall manage that
+    // This just handles displaying incoming media
+    console.log('Remote track attached, inCall:', inCall);
   };
   pc.ondatachannel = e => { console.log('Incoming data channel'); dataChannel = e.channel; setupDataChannel(); };
 
@@ -1535,11 +1536,10 @@ function setupDataChannel() {
         case 'file-notify': toast('Peer sent: ' + msg.fileName); break;
         case 'call-start':
           if (!inCall) {
-            console.log('Auto-joining call, withVideo:', msg.withVideo);
+            console.log('Received call-start, withVideo:', msg.withVideo, 'peerConnection state:', peerConnection?.signalingState);
             toast(msg.withVideo ? 'Incoming video call — joining...' : 'Incoming voice call — joining...');
-            // Auto-join with matching media type after a short delay
-            // (gives time for the renegotiation from the initiator to complete first)
-            setTimeout(() => joinCall(msg.withVideo), 1500);
+            // Wait for signaling to stabilize before adding our own tracks
+            waitForStableAndJoin(msg.withVideo);
           }
           break;
         case 'call-end': if (inCall) { endCall(); toast('Peer ended the call'); } break;
@@ -1623,13 +1623,16 @@ async function startCall(withVideo) {
 
 // Join an incoming call — add our own media without notifying (they already know)
 async function joinCall(withVideo) {
-  if (!peerConnected || !peerConnection) { toast('No peer connected', true); return; }
-  if (inCall) return;
+  if (!peerConnected || !peerConnection) { console.log('joinCall: no peer connection'); toast('No peer connected', true); return; }
+  console.log('joinCall starting, withVideo:', withVideo, 'signalingState:', peerConnection.signalingState);
   try {
     const constraints = { audio: true, video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } : false };
+    console.log('joinCall: requesting media...');
     localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    console.log('joinCall: got media, tracks:', localStream.getTracks().map(t => t.kind).join(', '));
 
     localStream.getTracks().forEach(track => {
+      console.log('joinCall: adding track:', track.kind);
       peerConnection.addTrack(track, localStream);
     });
 
@@ -1639,6 +1642,7 @@ async function joinCall(withVideo) {
     }
 
     // Renegotiate so our tracks get sent to the peer
+    console.log('joinCall: starting renegotiation...');
     await doRenegotiation();
 
     inCall = true;
@@ -1657,16 +1661,49 @@ async function joinCall(withVideo) {
   }
 }
 
+// Wait for signaling state to be stable before joining
+function waitForStableAndJoin(withVideo) {
+  let attempts = 0;
+  const check = () => {
+    attempts++;
+    if (!peerConnection) return;
+    const state = peerConnection.signalingState;
+    console.log('waitForStable attempt', attempts, 'state:', state);
+    if (state === 'stable') {
+      joinCall(withVideo);
+    } else if (attempts < 20) {
+      setTimeout(check, 300);
+    } else {
+      console.log('waitForStable: gave up after 20 attempts, trying anyway');
+      joinCall(withVideo);
+    }
+  };
+  // Start checking after a brief delay
+  setTimeout(check, 500);
+}
+
 // Shared renegotiation — works for both offerer and answerer
 async function doRenegotiation() {
   if (!peerConnection) return;
+  // Wait for stable state if needed
+  if (peerConnection.signalingState !== 'stable') {
+    console.log('doRenegotiation: waiting for stable state, current:', peerConnection.signalingState);
+    await new Promise(resolve => {
+      const check = () => {
+        if (!peerConnection || peerConnection.signalingState === 'stable') { resolve(); return; }
+        setTimeout(check, 200);
+      };
+      setTimeout(check, 200);
+    });
+  }
   try {
+    console.log('doRenegotiation: creating offer, state:', peerConnection.signalingState);
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     await sigDoc('offer').set({ type: offer.type, sdp: offer.sdp, session: mySessionId, ts: Date.now() });
-    console.log('Renegotiation offer sent');
+    console.log('doRenegotiation: offer sent successfully');
   } catch (e) {
-    console.error('Renegotiation error:', e);
+    console.error('doRenegotiation error:', e);
   }
 }
 
