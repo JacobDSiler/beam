@@ -1457,8 +1457,19 @@ async function initWebRTC(code) {
     // Is this a renegotiation from our existing peer, or a new peer?
     if (peerSessionId === d.session && peerConnected) {
       // RENEGOTIATION — same peer added media tracks, handle on existing PC
-      console.log('Renegotiation offer from existing peer');
+      console.log('Renegotiation offer from existing peer, our state:', peerConnection.signalingState);
       try {
+        // Handle glare: if we also sent an offer, one side needs to back down
+        // The peer with the higher session ID wins as offerer
+        if (peerConnection.signalingState === 'have-local-offer') {
+          if (mySessionId > d.session) {
+            console.log('Glare: we win, ignoring their offer');
+            return;
+          }
+          // We lose — rollback our offer and accept theirs
+          console.log('Glare: they win, rolling back our offer');
+          await peerConnection.setLocalDescription({ type: 'rollback' });
+        }
         await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
@@ -1523,7 +1534,13 @@ function setupDataChannel() {
         case 'file-end': handleRTCFileEnd(); break;
         case 'file-notify': toast('Peer sent: ' + msg.fileName); break;
         case 'call-start':
-          toast(msg.withVideo ? 'Incoming video call — tap call button to join' : 'Incoming voice call — tap call button to join');
+          if (!inCall) {
+            console.log('Auto-joining call, withVideo:', msg.withVideo);
+            toast(msg.withVideo ? 'Incoming video call — joining...' : 'Incoming voice call — joining...');
+            // Auto-join with matching media type after a short delay
+            // (gives time for the renegotiation from the initiator to complete first)
+            setTimeout(() => joinCall(msg.withVideo), 1500);
+          }
           break;
         case 'call-end': if (inCall) { endCall(); toast('Peer ended the call'); } break;
       }
@@ -1564,6 +1581,7 @@ let isCamOff = false;
 
 async function startCall(withVideo) {
   if (!peerConnected || !peerConnection) { toast('No peer connected', true); return; }
+  if (inCall) return; // already in a call
   try {
     const constraints = { audio: true, video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } : false };
     localStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -1579,17 +1597,13 @@ async function startCall(withVideo) {
       document.getElementById('video-container').classList.add('active');
     }
 
-    // Notify peer
+    // Notify peer to auto-join
     if (dataChannel?.readyState === 'open') {
       dataChannel.send(JSON.stringify({ type: 'call-start', withVideo }));
     }
 
-    // Renegotiate after adding tracks
-    const newOffer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(newOffer);
-    // Always publish as offer with our session — the other side will detect
-    // it as renegotiation from an existing peer and handle it on the same PC
-    await sigDoc('offer').set({ type: newOffer.type, sdp: newOffer.sdp, session: mySessionId, ts: Date.now() });
+    // Renegotiate — create a new offer with our media tracks
+    await doRenegotiation();
 
     inCall = true;
     isMuted = false;
@@ -1604,6 +1618,55 @@ async function startCall(withVideo) {
     } else {
       toast('Could not start call: ' + e.message, true);
     }
+  }
+}
+
+// Join an incoming call — add our own media without notifying (they already know)
+async function joinCall(withVideo) {
+  if (!peerConnected || !peerConnection) { toast('No peer connected', true); return; }
+  if (inCall) return;
+  try {
+    const constraints = { audio: true, video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } : false };
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    localStream.getTracks().forEach(track => {
+      peerConnection.addTrack(track, localStream);
+    });
+
+    if (withVideo) {
+      document.getElementById('local-video').srcObject = localStream;
+      document.getElementById('video-container').classList.add('active');
+    }
+
+    // Renegotiate so our tracks get sent to the peer
+    await doRenegotiation();
+
+    inCall = true;
+    isMuted = false;
+    isCamOff = false;
+    updateCallUI();
+    if (!callTimerInterval) startCallTimer();
+    toast(withVideo ? 'Video call joined' : 'Voice call joined');
+  } catch (e) {
+    console.error('Join call error:', e);
+    if (e.name === 'NotAllowedError') {
+      toast('Microphone/camera permission denied', true);
+    } else {
+      toast('Could not join call: ' + e.message, true);
+    }
+  }
+}
+
+// Shared renegotiation — works for both offerer and answerer
+async function doRenegotiation() {
+  if (!peerConnection) return;
+  try {
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    await sigDoc('offer').set({ type: offer.type, sdp: offer.sdp, session: mySessionId, ts: Date.now() });
+    console.log('Renegotiation offer sent');
+  } catch (e) {
+    console.error('Renegotiation error:', e);
   }
 }
 
@@ -1897,13 +1960,9 @@ function formatRecTime() {
   return m + ':' + s;
 }
 
-// ===================== NOTIFICATIONS (Cloudflare Worker) =====================
-// ---- CONFIGURE THESE ----
+// ===================== NOTIFICATIONS (Cloudflare Worker — no secrets here) =====================
 const NOTIFY_WORKER_URL = 'YOUR_WORKER_URL'; // e.g. https://beam-notify.yourname.workers.dev
-const BEAM_SECRET = 'YOUR_BEAM_SECRET';       // same secret set in the Worker
-// --------------------------
-
-const notifyReady = NOTIFY_WORKER_URL !== 'YOUR_WORKER_URL' && BEAM_SECRET !== 'YOUR_BEAM_SECRET';
+// That's it — no API keys, no secrets. The Worker handles everything server-side.
 
 function showSubscribeModal() {
   if (!currentBox) return;
@@ -1983,49 +2042,25 @@ async function unsubscribe() {
 }
 
 async function notifySubscribers(itemType, itemName) {
-  if (!currentBox || !notifyReady) return;
+  if (!currentBox || NOTIFY_WORKER_URL === 'YOUR_WORKER_URL') return;
   
-  const myId = localStorage.getItem('beam_sub_' + currentBox.code);
+  const boxUrl = window.location.origin + window.location.pathname + '?box=' + encodeURIComponent(currentBox.code);
   
-  try {
-    const snap = await db.collection('boxes').doc(currentBox.code).collection('items')
-      .where('type', '==', 'subscriber').get();
-    if (snap.empty) return;
-    
-    const boxUrl = window.location.origin + window.location.pathname + '?box=' + encodeURIComponent(currentBox.code);
-    
-    // Build subscriber list, excluding self
-    const subscribers = [];
-    snap.forEach(doc => {
-      const sub = doc.data();
-      if (sub.email === myId) return;
-      if (sub.email) subscribers.push({ email: sub.email });
-    });
-    
-    if (subscribers.length === 0) return;
-    
-    // Call the Worker
-    fetch(NOTIFY_WORKER_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + BEAM_SECRET
-      },
-      body: JSON.stringify({
-        subscribers,
-        boxCode: currentBox.code,
-        itemType,
-        itemName: itemName || '',
-        boxUrl
-      })
-    }).then(r => r.json()).then(data => {
-      console.log('Notifications sent:', data);
-    }).catch(err => {
-      console.error('Notify error:', err);
-    });
-  } catch (e) {
-    console.log('Notify error:', e);
-  }
+  // Just ping the Worker — it reads subscribers from Firestore itself
+  fetch(NOTIFY_WORKER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      boxCode: currentBox.code,
+      itemType,
+      itemName: itemName || '',
+      boxUrl
+    })
+  }).then(r => r.json()).then(data => {
+    if (data.sent > 0) console.log('Notifications sent:', data.sent);
+  }).catch(err => {
+    console.log('Notify ping failed (non-critical):', err);
+  });
 }
 
 // ===================== HELPERS =====================
