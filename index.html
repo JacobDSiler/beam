@@ -1046,7 +1046,7 @@ async function sendFileViaRTC(file, itemPassHash) {
       dataChannel.send(JSON.stringify({ type: 'file-end', fileName: file.name }));
       progressEl.style.display = 'none';
       toast('Sent ' + file.name + ' via direct transfer');
-      notifySubscribers('file', file.name);
+      notifySubscribers('file', itemPassHash ? '(protected file)' : file.name);
 
       // Also save a reference (not the data) in Firestore so it shows in the list
       db.collection('boxes').doc(currentBox.code).collection('items').add({
@@ -1098,7 +1098,7 @@ async function sendFileViaFirestore(file, itemPassHash) {
     document.getElementById('progress-pct').textContent = '100%';
     setTimeout(() => { progressEl.style.display = 'none'; }, 400);
     toast('Uploaded ' + file.name + (itemPassHash ? ' (protected)' : ''));
-      notifySubscribers('file', file.name);
+      notifySubscribers('file', itemPassHash ? '(protected file)' : file.name);
   } catch (e) {
     console.error('Upload error:', e);
     progressEl.style.display = 'none';
@@ -1209,7 +1209,7 @@ async function sendMessage() {
           const file = new File([mediaBlob], mediaType + '-message.webm', { type: mediaBlob.type });
           await sendFileViaRTC(file, itemPassHash);
           toast('Sent — media via direct transfer');
-          notifySubscribers('message + ' + mediaType, text?.substring(0, 30) || mediaType + ' message');
+          notifySubscribers('message + ' + mediaType, itemPassHash ? '(protected content)' : (text?.substring(0, 30) || mediaType + ' message'));
           clearItemPasscode();
           return;
         } else {
@@ -1250,7 +1250,7 @@ async function sendMessage() {
       dataChannel.send(JSON.stringify({ type: 'message', text: itemPassHash ? '(protected)' : (text || mediaType + ' message').substring(0, 50) }));
     }
     toast(hasMedia ? (text ? 'Message + ' + mediaType + ' sent' : mediaType.charAt(0).toUpperCase() + mediaType.slice(1) + ' message sent') : 'Message sent');
-    notifySubscribers(itemData.type, (text || mediaType + ' message').substring(0, 50));
+    notifySubscribers(itemData.type, itemPassHash ? '(protected content)' : (text || mediaType + ' message').substring(0, 50));
     clearItemPasscode();
   } catch (e) {
     console.error(e);
@@ -1830,15 +1830,20 @@ async function startRecording(type) {
   recType = type;
   try {
     const constraints = type === 'video'
-      ? { audio: true, video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } }
+      ? { audio: true, video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15 }, facingMode: 'user' } }
       : { audio: true };
     recStream = await navigator.mediaDevices.getUserMedia(constraints);
 
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus'
+    const videoMime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus'
       : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus') ? 'video/webm;codecs=vp8,opus'
-      : MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+      : 'video/webm';
+    const audioMime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
 
-    voiceRecorder = new MediaRecorder(recStream, { mimeType: type === 'video' ? mimeType : (MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm') });
+    const recOptions = type === 'video'
+      ? { mimeType: videoMime, videoBitsPerSecond: 100000, audioBitsPerSecond: 32000 }  // ~100kbps video + 32kbps audio ≈ 80KB per 5 sec
+      : { mimeType: audioMime, audioBitsPerSecond: 32000 }; // ~32kbps audio ≈ 20KB per 5 sec
+
+    voiceRecorder = new MediaRecorder(recStream, recOptions);
     voiceChunks = [];
     voiceRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
     voiceRecorder.onstop = () => {
@@ -1846,7 +1851,8 @@ async function startRecording(type) {
       voiceChunks = [];
       showRecordingPreview();
     };
-    voiceRecorder.start();
+    // Request data every second so we can track size
+    voiceRecorder.start(1000);
     voiceRecording = true;
 
     // Show preview area
@@ -1897,9 +1903,13 @@ function showRecordingPreview() {
   // Stop live preview
   document.getElementById('rec-indicator').style.display = 'none';
   document.getElementById('rec-video-preview').style.display = 'none';
-  document.getElementById('rec-label').textContent = recType === 'video'
-    ? 'Video message (' + formatRecTime() + ')'
-    : 'Voice message (' + formatRecTime() + ')';
+  
+  const sizeStr = formatBytes(recBlob.size);
+  const fitsCloud = recBlob.size <= MAX_FILE_BYTES;
+  const sizeNote = fitsCloud ? '☁️ ' + sizeStr : (peerConnected ? '⚡ ' + sizeStr + ' (via direct transfer)' : '⚠️ ' + sizeStr + ' (too large for cloud — need peer)');
+  
+  document.getElementById('rec-label').textContent = (recType === 'video' ? 'Video' : 'Voice') + ' · ' + formatRecTime() + ' · ' + sizeNote;
+  document.getElementById('rec-label').style.color = fitsCloud || peerConnected ? 'var(--text2)' : 'var(--warn)';
 
   // Stop the stream tracks
   if (recStream) { recStream.getTracks().forEach(t => t.stop()); recStream = null; }
@@ -1978,7 +1988,7 @@ async function saveRecordedMessage(blob, type) {
       await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
       await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
       toast(type === 'video' ? 'Video message sent' : 'Voice message sent');
-      notifySubscribers(type + ' message', fileName);
+      notifySubscribers(type + ' message', itemPassHash ? '(protected content)' : fileName);
       clearItemPasscode();
     } catch (e) { toast('Failed to send ' + type + ' message', true); }
   };
@@ -1988,7 +1998,12 @@ async function saveRecordedMessage(blob, type) {
 function updateRecTimer() {
   const m = String(Math.floor(recSeconds / 60)).padStart(2, '0');
   const s = String(recSeconds % 60).padStart(2, '0');
-  document.getElementById('rec-timer').textContent = m + ':' + s;
+  // Show current recording size
+  const currentSize = voiceChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+  const sizeStr = formatBytes(currentSize);
+  const overLimit = currentSize > MAX_FILE_BYTES;
+  document.getElementById('rec-timer').textContent = m + ':' + s + ' · ' + sizeStr;
+  document.getElementById('rec-timer').style.color = overLimit ? 'var(--warn)' : 'var(--beam)';
 }
 
 function formatRecTime() {
@@ -1998,7 +2013,7 @@ function formatRecTime() {
 }
 
 // ===================== NOTIFICATIONS (Cloudflare Worker — no secrets here) =====================
-const NOTIFY_WORKER_URL = 'https://beam-notify.jacobdsiler.workers.dev/'; // Worker Url goes here as the only exposed code
+const NOTIFY_WORKER_URL = 'https://beam-notify.jacobdsiler.workers.dev/'; // e.g. https://beam-notify.yourname.workers.dev
 // That's it — no API keys, no secrets. The Worker handles everything server-side.
 
 function showSubscribeModal() {
