@@ -1517,15 +1517,26 @@ function sigDoc(name) { return db.doc('boxes/' + boxCode_ + '/signaling/' + name
 function candCol(name) { return db.collection('boxes/' + boxCode_ + '/signaling/' + name + '/candidates'); }
 
 async function cleanSignaling() {
+  // Only clean up docs that belong to our own previous session.
+  // We must NOT delete offers/answers from other users who may already be connected.
+  // On first open there's nothing to clean; on rejoin we clear our own stale entries.
   try {
-    await sigDoc('offer').delete().catch(()=>{});
-    await sigDoc('answer').delete().catch(()=>{});
-    for (const parent of ['offer','answer']) {
-      const snap = await candCol(parent).get().catch(()=>({docs:[]}));
-      if (snap.docs) {
+    // Clean up our own old offer/answer if we left and rejoined
+    const offerSnap = await sigDoc('offer').get().catch(() => null);
+    if (offerSnap?.exists && offerSnap.data()?.session === mySessionId) {
+      await sigDoc('offer').delete().catch(() => {});
+    }
+    const answerSnap = await sigDoc('answer').get().catch(() => null);
+    if (answerSnap?.exists && answerSnap.data()?.session === mySessionId) {
+      await sigDoc('answer').delete().catch(() => {});
+    }
+    // Clean ICE candidates we previously wrote
+    for (const parent of ['offer', 'answer']) {
+      const snap = await candCol(parent).where('session', '==', mySessionId).get().catch(() => ({ docs: [] }));
+      if (snap.docs?.length) {
         const batch = db.batch();
         snap.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit().catch(()=>{});
+        await batch.commit().catch(() => {});
       }
     }
   } catch(e) { console.log('Clean signaling:', e); }
@@ -1682,27 +1693,26 @@ async function initWebRTC(code) {
       return;
     }
 
-    // NEW PEER — answer their offer
+    // NEW PEER — answer their offer using the existing peerConnection.
+    // Previously this created a fresh pc2 and closed the original, which destroyed
+    // the data channel (created on the original PC). Now we reuse the existing PC.
     console.log('Got offer from new peer:', d.session);
     peerSessionId = d.session;
     isOfferer = false;
 
-    const pc2 = createPeerConnection(config);
-    pc2.onicecandidate = e => {
+    // Switch ICE candidate writer to 'answer' collection for this role
+    peerConnection.onicecandidate = e => {
       if (e.candidate) {
         candCol('answer').add({ ...e.candidate.toJSON(), session: mySessionId, ts: Date.now() }).catch(()=>{});
       }
     };
 
     try {
-      await pc2.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
-      const answer = await pc2.createAnswer();
-      await pc2.setLocalDescription(answer);
+      await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: d.type, sdp: d.sdp }));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
       await sigDoc('answer').set({ type: answer.type, sdp: answer.sdp, session: mySessionId, answerTo: d.session, ts: Date.now() });
       console.log('Published answer to new peer');
-
-      try { peerConnection.close(); } catch {}
-      peerConnection = pc2;
     } catch(e) { console.error('Answer offer error:', e); }
   });
   sigUnsubs.push(unsubOff);
