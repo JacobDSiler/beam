@@ -148,6 +148,11 @@ input::placeholder{color:var(--text3)}
 .item-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item-meta{font-size:11px;color:var(--text3);margin-top:2px}
 .item-msg{font-size:13px;color:var(--text);line-height:1.4;padding:4px 0;word-break:break-word}
+.file-preview-img{margin:6px 0 4px;border-radius:6px;overflow:hidden;max-width:220px;line-height:0}
+.file-preview-img img{width:100%;max-height:140px;object-fit:cover;border-radius:6px;display:block}
+.file-preview-text{margin:6px 0 4px;background:var(--surface3);border-radius:6px;padding:7px 10px;max-width:280px;overflow:hidden}
+.file-preview-text pre{font-family:var(--font-mono);font-size:10px;color:var(--text2);line-height:1.4;
+  white-space:pre-wrap;word-break:break-all;max-height:60px;overflow:hidden;margin:0}
 .beam-link{color:var(--beam);text-decoration:none;border-bottom:1px solid var(--beam-dim);position:relative;display:inline}
 .beam-link:hover{border-bottom-color:var(--beam)}
 .beam-link-preview{
@@ -988,6 +993,7 @@ function renderItem(item) {
       <div class="item-actions">${unlockBtn}<button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','message')">&#x1f5d1;</button></div>`;
   } else {
     const nameDisplay = isLocked && !isUnlocked ? '&#x1f512; Protected file' : escapeHtml(item.fileName);
+    const preview = (!isLocked || isUnlocked) ? filePreviewHtml(item) : '';
     let downloadBtn;
     if (isRTCOnly) {
       downloadBtn = `<button class="btn-icon" title="Sent via direct transfer" style="opacity:.4;cursor:default">⚡</button>`;
@@ -997,7 +1003,12 @@ function renderItem(item) {
       downloadBtn = `<button class="btn-icon" title="Download" onclick="downloadItem('${item.id}')">&#x2b07;</button>`;
     }
     div.innerHTML = `<div class="item-icon">${fileIcon(item.fileName)}</div>
-      <div class="item-info"><div class="item-name">${nameDisplay}</div>${lockBadge}${rtcBadge}${expiryBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
+      <div class="item-info">
+        <div class="item-name">${nameDisplay}</div>
+        ${preview}
+        ${lockBadge}${rtcBadge}${expiryBadge}
+        <div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div>
+      </div>
       <div class="item-actions">
         ${downloadBtn}
         <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','file')">&#x1f5d1;</button>
@@ -1704,11 +1715,11 @@ function createPeerConnection(config) {
       rv.srcObject.addTrack(e.track);
       rv.play().catch(err => console.log('Video play blocked:', err));
       document.getElementById('video-container').classList.add('active');
-      // Forward track to popout window if open
+      // Forward track to popout window if open — share the same srcObject reference
       if (popoutWin && !popoutWin.closed) {
         try {
           const pr = popoutWin.document.getElementById('pop-remote');
-          if (pr) { if (!pr.srcObject) pr.srcObject = new MediaStream(); pr.srcObject.addTrack(e.track); }
+          if (pr) pr.srcObject = rv.srcObject;
         } catch(err) { console.log('Popout track forward:', err); }
       }
     }
@@ -2228,21 +2239,31 @@ function showSelf(){
   popoutWin = window.open(blobUrl, 'BeamVideoCall', `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no,scrollbars=no`);
   if (!popoutWin) { URL.revokeObjectURL(blobUrl); toast('Pop-out blocked — allow popups for this site', true); return; }
 
-  // Assign streams once the popup's blob document has loaded
-  popoutWin.addEventListener('load', () => {
+  // Poll until the popup DOM is ready, then assign streams directly.
+  // Using addEventListener('load') on the popup ref is unreliable — the event
+  // may fire before the listener is attached. Direct srcObject sharing works
+  // because blob: URLs share the same origin as the parent page.
+  let attempts = 0;
+  const assignWhenReady = () => {
+    attempts++;
     try {
+      if (!popoutWin || popoutWin.closed) return;
       const r = popoutWin.document.getElementById('pop-remote');
       const l = popoutWin.document.getElementById('pop-local');
-      // Clone existing tracks into fresh MediaStreams for cross-window assignment
-      if (r && remoteEl.srcObject && remoteEl.srcObject.getTracks().length) {
-        r.srcObject = new MediaStream(remoteEl.srcObject.getTracks());
+      if (!r || !l) {
+        if (attempts < 40) setTimeout(assignWhenReady, 100);
+        return;
       }
-      if (l && localEl.srcObject && localEl.srcObject.getTracks().length) {
-        l.srcObject = new MediaStream(localEl.srcObject.getTracks());
-      }
-    } catch(e) { console.log('Popout stream assign error:', e); }
-    URL.revokeObjectURL(blobUrl);
-  });
+      // Assign srcObject directly — same origin means no cross-context restriction
+      if (remoteEl.srcObject) r.srcObject = remoteEl.srcObject;
+      if (localEl.srcObject)  l.srcObject = localEl.srcObject;
+      URL.revokeObjectURL(blobUrl);
+    } catch(e) {
+      console.log('Popout assign attempt', attempts, e.message);
+      if (attempts < 40) setTimeout(assignWhenReady, 100);
+    }
+  };
+  setTimeout(assignWhenReady, 150);
 
   popoutWin.onbeforeunload = () => { popoutWin = null; };
 }
@@ -2678,6 +2699,33 @@ function stopExpirySweeper() {
 
 // ===================== HELPERS =====================
 function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+// Returns an inline preview element string for a file item, or '' if not previewable
+function filePreviewHtml(item) {
+  if (!item.fileData || !item.mimeType) return '';
+  const mime = item.mimeType.toLowerCase();
+  const src = `data:${item.mimeType};base64,${item.fileData}`;
+
+  // Image preview
+  if (mime.startsWith('image/')) {
+    return `<div class="file-preview-img"><img src="${src}" alt="${escapeHtml(item.fileName||'')}" loading="lazy"></div>`;
+  }
+
+  // Text / code / JSON / CSV snippet
+  const isText = mime.startsWith('text/') || ['application/json','application/javascript',
+    'application/xml','application/csv','application/x-sh'].includes(mime);
+  const textExt = /\.(txt|md|json|js|ts|jsx|tsx|css|html|htm|xml|csv|yaml|yml|sh|py|rb|java|c|cpp|h|rs|go|sql|log)$/i;
+  if (isText || (item.fileName && textExt.test(item.fileName))) {
+    try {
+      const raw = atob(item.fileData);
+      const snippet = raw.slice(0, 200).replace(/\r\n/g,'\n');
+      const display = snippet.length < raw.length ? snippet + '…' : snippet;
+      return `<div class="file-preview-text"><pre>${escapeHtml(display)}</pre></div>`;
+    } catch { return ''; }
+  }
+
+  return '';
+}
 
 // Linkify: turn URLs in already-escaped HTML into clickable links with hover preview
 function linkify(escapedHtml) {
