@@ -147,7 +147,17 @@ input::placeholder{color:var(--text3)}
 .item-info{flex:1;min-width:0}
 .item-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item-meta{font-size:11px;color:var(--text3);margin-top:2px}
-.item-msg{font-size:13px;color:var(--text);line-height:1.4;padding:4px 0}
+.item-msg{font-size:13px;color:var(--text);line-height:1.4;padding:4px 0;word-break:break-word}
+.beam-link{color:var(--beam);text-decoration:none;border-bottom:1px solid var(--beam-dim);position:relative;display:inline}
+.beam-link:hover{border-bottom-color:var(--beam)}
+.beam-link-preview{
+  display:none;position:absolute;bottom:calc(100% + 6px);left:0;
+  background:var(--surface2);border:1px solid var(--surface3);border-radius:8px;
+  padding:7px 10px;white-space:nowrap;font-size:12px;color:var(--text2);
+  align-items:center;gap:6px;z-index:100;box-shadow:0 4px 20px rgba(0,0,0,.4);
+  pointer-events:none;max-width:260px;overflow:hidden;text-overflow:ellipsis;
+}
+.beam-link:hover .beam-link-preview{display:flex}
 .item-actions{display:flex;gap:6px}
 
 .empty-state{text-align:center;padding:30px;color:var(--text3);font-size:13px}
@@ -270,6 +280,13 @@ input::placeholder{color:var(--text3)}
 .video-box{position:relative;flex:1;min-height:120px;max-height:200px;background:#000;border-radius:var(--radius-sm);overflow:hidden}
 .video-box video{width:100%;height:100%;object-fit:cover}
 .video-label{position:absolute;bottom:6px;left:8px;font-size:10px;color:#fff;background:rgba(0,0,0,.6);padding:2px 8px;border-radius:8px;letter-spacing:.5px}
+.video-overlay-btns{position:absolute;bottom:8px;right:8px;display:flex;gap:6px;z-index:10}
+.video-overlay-btn{
+  width:28px;height:28px;border-radius:6px;background:rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.15);
+  color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .15s;padding:0;
+}
+.video-overlay-btn:hover{background:rgba(0,0,0,.85)}
 
 /* === VOICE RECORD === */
 .voice-record-btn{flex-shrink:0}
@@ -414,13 +431,21 @@ input::placeholder{color:var(--text3)}
 
     <!-- Video Container -->
     <div class="video-container" id="video-container">
-      <div class="video-box">
+      <div class="video-box" id="video-box-remote">
         <video id="remote-video" autoplay playsinline></video>
         <div class="video-label">Peer</div>
       </div>
-      <div class="video-box" style="max-width:35%">
+      <div class="video-box" id="video-box-local" style="max-width:35%">
         <video id="local-video" autoplay playsinline muted></video>
         <div class="video-label">You</div>
+      </div>
+      <div class="video-overlay-btns">
+        <button class="video-overlay-btn" onclick="popoutVideo()" title="Pop out to window">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        </button>
+        <button class="video-overlay-btn" onclick="fullscreenVideo()" title="Fullscreen">
+          <svg id="fs-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 3 3 3 3 8"/><polyline points="21 8 21 3 16 3"/><polyline points="3 16 3 21 8 21"/><polyline points="16 21 21 21 21 16"/></svg>
+        </button>
       </div>
     </div>
 
@@ -481,7 +506,10 @@ input::placeholder{color:var(--text3)}
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px;font-weight:600">⏳ Expiry for next item</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap" id="item-expiry-pills">
         <button class="expiry-pill" data-value="0" onclick="setItemExpiry(0)">No expiry</button>
+        <button class="expiry-pill" data-value="0.083" onclick="setItemExpiry(0.083)">5 min</button>
+        <button class="expiry-pill" data-value="0.5" onclick="setItemExpiry(0.5)">30 min</button>
         <button class="expiry-pill" data-value="1" onclick="setItemExpiry(1)">1 hour</button>
+        <button class="expiry-pill" data-value="6" onclick="setItemExpiry(6)">6 hours</button>
         <button class="expiry-pill" data-value="24" onclick="setItemExpiry(24)">24 hours</button>
         <button class="expiry-pill" data-value="168" onclick="setItemExpiry(168)">7 days</button>
         <button class="expiry-pill custom-expiry-trigger" onclick="toggleCustomExpiry()">Custom…</button>
@@ -892,20 +920,23 @@ function renderItem(item) {
   }
 
   if (item.type === 'voice' || item.type === 'video-msg') {
-    // Voice message with audio player
+    const isVideo = item.type === 'video-msg';
     if (isLocked && !isUnlocked) {
-      div.innerHTML = `<div class="item-icon">&#x1f3a4;</div>
-        <div class="item-info"><div class="item-msg">&#x1f512; Protected voice message</div>${lockBadge}${expiryBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
+      div.innerHTML = `<div class="item-icon">${isVideo ? '&#x1f4f9;' : '&#x1f3a4;'}</div>
+        <div class="item-info"><div class="item-msg">&#x1f512; Protected ${isVideo ? 'video' : 'voice'} message</div>${lockBadge}${expiryBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div></div>
         <div class="item-actions">
           <button class="btn-icon" title="Unlock" onclick="promptItemUnlock('${item.id}','view')">&#x1f513;</button>
           <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','voice')">&#x1f5d1;</button>
         </div>`;
     } else {
-      const audioSrc = item.fileData ? `data:${item.mimeType || 'audio/webm'};base64,${item.fileData}` : '';
-      div.innerHTML = `<div class="item-icon">&#x1f3a4;</div>
+      const mediaSrc = item.fileData ? `data:${item.mimeType || (isVideo ? 'video/webm' : 'audio/webm')};base64,${item.fileData}` : '';
+      const mediaEl = isVideo
+        ? (mediaSrc ? `<video controls playsinline preload="metadata" src="${mediaSrc}" style="width:100%;max-height:180px;border-radius:6px;display:block"></video>` : '<span style="color:var(--text3);font-size:12px">Video (sent via RTC)</span>')
+        : (mediaSrc ? `<audio controls preload="none" src="${mediaSrc}"></audio>` : '<span style="color:var(--text3);font-size:12px">Voice (sent via RTC)</span>');
+      div.innerHTML = `<div class="item-icon">${isVideo ? '&#x1f4f9;' : '&#x1f3a4;'}</div>
         <div class="item-info">
-          <div class="voice-msg-player">
-            ${audioSrc ? `<audio controls preload="none" src="${audioSrc}"></audio>` : '<span style="color:var(--text3);font-size:12px">Voice (sent via RTC)</span>'}
+          <div class="${isVideo ? '' : 'voice-msg-player'}" style="${isVideo ? 'width:100%' : ''}">
+            ${mediaEl}
           </div>
           ${lockBadge}${rtcBadge}${expiryBadge}<div class="item-meta">${formatBytes(item.size||0)} &middot; ${timeAgo(item.createdAt?.toDate())}</div>
         </div>
@@ -914,7 +945,7 @@ function renderItem(item) {
         </div>`;
     }
   } else if (item.type === 'message') {
-    const msgContent = isLocked && !isUnlocked ? '••••••••••••' : escapeHtml(item.text);
+    const msgContent = isLocked && !isUnlocked ? '••••••••••••' : linkify(escapeHtml(item.text));
     const unlockBtn = isLocked && !isUnlocked
       ? `<button class="btn-icon" title="Unlock" onclick="promptItemUnlock('${item.id}','view')">&#x1f513;</button>` : '';
     div.innerHTML = `<div class="item-icon">&#x1f4ac;</div>
@@ -994,7 +1025,7 @@ function setItemExpiry(hours) {
     itemExpiryHours = 0;
   } else {
     btn.classList.add('item-expiry-active');
-    const label = hours < 24 ? `${hours}h` : hours < 168 ? `${hours/24}d` : '7d';
+    const label = hours < 1 ? `${Math.round(hours * 60)}m` : hours < 24 ? `${hours}h` : hours < 168 ? `${hours/24}d` : '7d';
     btn.title = `Expires in ${label}`;
   }
   // Hide the row after selection (except custom)
@@ -1035,10 +1066,10 @@ function applyCustomExpiry() {
 function updateExpiryPills() {
   document.querySelectorAll('.expiry-pill').forEach(p => p.classList.remove('active'));
   if (itemExpiryHours === null) return;
-  if (itemExpiryHours === 0) document.querySelector('.expiry-pill[data-value="0"]')?.classList.add('active');
-  else if (itemExpiryHours === 1) document.querySelector('.expiry-pill[data-value="1"]')?.classList.add('active');
-  else if (itemExpiryHours === 24) document.querySelector('.expiry-pill[data-value="24"]')?.classList.add('active');
-  else if (itemExpiryHours === 168) document.querySelector('.expiry-pill[data-value="168"]')?.classList.add('active');
+  // Match by closest data-value
+  document.querySelectorAll('.expiry-pill[data-value]').forEach(p => {
+    if (Math.abs(parseFloat(p.dataset.value) - itemExpiryHours) < 0.001) p.classList.add('active');
+  });
 }
 
 // Returns the Firestore Timestamp for this item, respecting per-item override > box TTL > null
@@ -1650,7 +1681,9 @@ async function initWebRTC(code) {
     s.docChanges().forEach(c => {
       if (c.type === 'added' && peerConnection) {
         const cd = c.doc.data();
-        if (cd.session !== mySessionId) {
+        // Only accept candidates from our known peer; ignore strangers
+        const fromKnownPeer = cd.session !== mySessionId && (!peerSessionId || cd.session === peerSessionId);
+        if (fromKnownPeer) {
           peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
         }
       }
@@ -1667,6 +1700,14 @@ async function initWebRTC(code) {
     // Deduplicate by timestamp
     if (d.ts && d.ts <= lastOfferTs) return;
     lastOfferTs = d.ts || 0;
+
+    // === CONNECTION PROTECTION ===
+    // If we're already connected to a known peer, silently ignore offers from
+    // anyone else. A third device opening the box must not corrupt our session.
+    if (peerConnected && peerSessionId && d.session !== peerSessionId) {
+      console.log('Ignoring offer from unknown session (already connected):', d.session);
+      return;
+    }
 
     // Is this a renegotiation from our existing peer, or a new peer?
     if (peerSessionId === d.session && peerConnected) {
@@ -1722,7 +1763,9 @@ async function initWebRTC(code) {
     s.docChanges().forEach(c => {
       if (c.type === 'added' && peerConnection) {
         const cd = c.doc.data();
-        if (cd.session !== mySessionId) {
+        // Only accept candidates from our known peer; ignore strangers
+        const fromKnownPeer = cd.session !== mySessionId && (!peerSessionId || cd.session === peerSessionId);
+        if (fromKnownPeer) {
           peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: cd.candidate, sdpMid: cd.sdpMid, sdpMLineIndex: cd.sdpMLineIndex })).catch(()=>{});
         }
       }
@@ -1994,6 +2037,71 @@ function toggleCamera() {
   document.getElementById('cam-icon').innerHTML = isCamOff
     ? '<line x1="1" y1="1" x2="23" y2="23"/><path d="M21 21H3a2 2 0 01-2-2V8a2 2 0 012-2h3m3-3h6l2 3h4a2 2 0 012 2v9.34"/><path d="M16 11.37A4 4 0 1112.63 8"/>'
     : '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>';
+}
+
+let popoutWin = null;
+
+function fullscreenVideo() {
+  const vc = document.getElementById('video-container');
+  if (!document.fullscreenElement) {
+    vc.requestFullscreen().catch(e => toast('Fullscreen not available: ' + e.message, true));
+    document.getElementById('fs-icon').innerHTML = '<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>';
+  } else {
+    document.exitFullscreen();
+    document.getElementById('fs-icon').innerHTML = '<polyline points="8 3 3 3 3 8"/><polyline points="21 8 21 3 16 3"/><polyline points="3 16 3 21 8 21"/><polyline points="16 21 21 21 21 16"/>';
+  }
+}
+
+// Restore fs icon when user exits fullscreen via Escape
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) {
+    document.getElementById('fs-icon').innerHTML = '<polyline points="8 3 3 3 3 8"/><polyline points="21 8 21 3 16 3"/><polyline points="3 16 3 21 8 21"/><polyline points="16 21 21 21 21 16"/>';
+  }
+});
+
+function popoutVideo() {
+  if (popoutWin && !popoutWin.closed) { popoutWin.focus(); return; }
+
+  const remoteStream = document.getElementById('remote-video').srcObject;
+  const localStream = document.getElementById('local-video').srcObject;
+
+  const w = 640, h = 420;
+  const left = Math.round(screen.width / 2 - w / 2);
+  const top = Math.round(screen.height / 2 - h / 2);
+  popoutWin = window.open('', 'BeamVideoCall', `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no,scrollbars=no`);
+  if (!popoutWin) { toast('Pop-out blocked — allow popups for this site', true); return; }
+
+  popoutWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam — Video Call</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;display:flex;gap:4px;height:100vh;overflow:hidden}
+#pop-remote{flex:1;object-fit:cover;height:100%}
+#pop-local{position:absolute;bottom:12px;right:12px;width:25%;border-radius:8px;object-fit:cover;border:2px solid rgba(255,255,255,.2)}
+.lbl{position:absolute;font-size:11px;color:#fff;background:rgba(0,0,0,.6);padding:2px 8px;border-radius:8px}
+#lbl-r{bottom:12px;left:12px}
+#lbl-l{bottom:12px;right:calc(25% + 16px)}
+</style></head><body>
+<video id="pop-remote" autoplay playsinline></video>
+<video id="pop-local" autoplay playsinline muted></video>
+<div class="lbl" id="lbl-r">Peer</div>
+<div class="lbl" id="lbl-l">You</div>
+</body></html>`);
+  popoutWin.document.close();
+
+  // Assign streams after the window has rendered
+  popoutWin.onload = () => {
+    if (remoteStream) popoutWin.document.getElementById('pop-remote').srcObject = remoteStream;
+    if (localStream) popoutWin.document.getElementById('pop-local').srcObject = localStream;
+  };
+  // Fallback for browsers that fire load before onload is set
+  setTimeout(() => {
+    try {
+      if (remoteStream) popoutWin.document.getElementById('pop-remote').srcObject = remoteStream;
+      if (localStream) popoutWin.document.getElementById('pop-local').srcObject = localStream;
+    } catch {}
+  }, 200);
+
+  popoutWin.onbeforeunload = () => { popoutWin = null; };
 }
 
 function updateCallUI() {
@@ -2427,6 +2535,32 @@ function stopExpirySweeper() {
 
 // ===================== HELPERS =====================
 function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+// Linkify: turn URLs in already-escaped HTML into clickable links with hover preview
+function linkify(escapedHtml) {
+  // Match http/https URLs (already html-escaped, so & is &amp; etc — match on the escaped form)
+  const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
+  return escapedHtml.replace(urlRegex, url => {
+    // Decode for display (unescape &amp; etc that were in the original text)
+    const decoded = url.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+    let display, domain, favicon;
+    try {
+      const u = new URL(decoded);
+      domain = u.hostname.replace(/^www\./, '');
+      favicon = `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=16`;
+      // Truncate long paths for display
+      const path = u.pathname + u.search;
+      display = domain + (path.length > 30 ? path.slice(0, 28) + '…' : path === '/' ? '' : path);
+    } catch {
+      display = decoded.length > 40 ? decoded.slice(0, 38) + '…' : decoded;
+      domain = decoded;
+      favicon = null;
+    }
+    const safeUrl = url; // already html-escaped
+    const faviconHtml = favicon ? `<img src="${favicon}" width="14" height="14" style="border-radius:2px;flex-shrink:0" onerror="this.style.display='none'">` : '';
+    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="beam-link" data-domain="${escapeHtml(domain)}">${escapeHtml(display)}<span class="beam-link-preview">${faviconHtml}<span>${escapeHtml(domain)}</span></span></a>`;
+  });
+}
 function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
 function timeAgo(date) {
   if (!date) return 'just now';
