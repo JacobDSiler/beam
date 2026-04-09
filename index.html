@@ -286,7 +286,7 @@ input::placeholder{color:var(--text3)}
   box-shadow:0 2px 12px rgba(0,0,0,.5);transition:width .2s,max-width .2s,opacity .2s;z-index:3}
 #video-box-local video{width:100%;display:block;object-fit:cover;aspect-ratio:4/3}
 .video-label{position:absolute;bottom:5px;left:7px;font-size:10px;color:#fff;background:rgba(0,0,0,.6);padding:2px 7px;border-radius:8px;letter-spacing:.5px;z-index:2;pointer-events:none}
-.video-overlay-btns{position:absolute;bottom:8px;right:8px;display:flex;gap:6px;z-index:10}
+.video-overlay-btns{position:absolute;bottom:8px;left:8px;display:flex;gap:6px;z-index:10}
 .video-overlay-btn{
   width:28px;height:28px;border-radius:6px;background:rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.15);
   color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;
@@ -342,7 +342,7 @@ input::placeholder{color:var(--text3)}
   <div class="screen active" id="screen-home">
     <div class="home-actions">
       <div class="code-input-row">
-        <input type="text" id="join-code" placeholder="Enter box code" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text">
+        <input type="text" id="join-code" placeholder="Enter box code" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text" onkeydown="if(event.key==='Enter')joinBox()">
         <button class="btn-primary" onclick="joinBox()">Open</button>
       </div>
       <div class="or-divider">or</div>
@@ -456,20 +456,20 @@ input::placeholder{color:var(--text3)}
       <div class="video-box" id="video-box-remote">
         <video id="remote-video" autoplay playsinline></video>
         <div class="video-label">Peer</div>
+        <div class="video-overlay-btns">
+          <button class="video-overlay-btn" onclick="popoutVideo()" title="Pop out to window">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+          <button class="video-overlay-btn" onclick="fullscreenVideo()" title="Fullscreen">
+            <svg id="fs-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 3 3 3 3 8"/><polyline points="21 8 21 3 16 3"/><polyline points="3 16 3 21 8 21"/><polyline points="16 21 21 21 21 16"/></svg>
+          </button>
+        </div>
       </div>
       <div class="video-box" id="video-box-local" style="max-width:35%">
         <video id="local-video" autoplay playsinline muted></video>
         <div class="video-label">You</div>
         <button class="video-self-hide" id="btn-hide-self" onclick="toggleSelfView()" title="Hide your video">
           <svg id="self-hide-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
-      </div>
-      <div class="video-overlay-btns">
-        <button class="video-overlay-btn" onclick="popoutVideo()" title="Pop out to window">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-        </button>
-        <button class="video-overlay-btn" onclick="fullscreenVideo()" title="Fullscreen">
-          <svg id="fs-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 3 3 3 3 8"/><polyline points="21 8 21 3 16 3"/><polyline points="3 16 3 21 8 21"/><polyline points="16 21 21 21 21 16"/></svg>
         </button>
       </div>
     </div>
@@ -2111,22 +2111,14 @@ document.addEventListener('fullscreenchange', () => {
 function popoutVideo() {
   if (popoutWin && !popoutWin.closed) { popoutWin.focus(); return; }
 
-  // Clone tracks from srcObject to create new MediaStream objects that transfer
-  // cleanly across window boundaries. captureStream() can return empty tracks if
-  // called before the video element has rendered a frame. Track cloning is instant
-  // and works regardless of render state.
   const remoteEl = document.getElementById('remote-video');
   const localEl  = document.getElementById('local-video');
-  const remoteStream = remoteEl.srcObject ? new MediaStream(remoteEl.srcObject.getTracks()) : null;
-  const localStream  = localEl.srcObject  ? new MediaStream(localEl.srcObject.getTracks())  : null;
 
-  const w = 720, h = 460;
-  const left = Math.round(screen.width  / 2 - w / 2);
-  const top  = Math.round(screen.height / 2 - h / 2);
-  popoutWin = window.open('', 'BeamVideoCall', `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no,scrollbars=no`);
-  if (!popoutWin) { toast('Pop-out blocked — allow popups for this site', true); return; }
-
-  popoutWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam \u2014 Video Call</title>
+  // Build popup HTML as a Blob URL — this gives the popup the same effective
+  // origin as the parent page, which is required for cross-window MediaStream
+  // assignment. about:blank (produced by document.write) is a different context
+  // and Chrome blocks MediaStreamTrack use across it.
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam \u2014 Video Call</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#111;height:100vh;overflow:hidden;position:relative}
@@ -2145,7 +2137,7 @@ body{background:#111;height:100vh;overflow:hidden;position:relative}
 #btn-show:hover{background:rgba(255,255,255,.18);color:#fff}
 </style></head><body>
 <video id="pop-remote" autoplay playsinline></video>
-<video id="pop-local" autoplay playsinline muted title="Click to hide your camera"></video>
+<video id="pop-local" autoplay playsinline muted title="Click to hide"></video>
 <div class="lbl" id="lbl-peer">Peer</div>
 <div class="lbl" id="lbl-you">You</div>
 <button id="btn-show" onclick="showSelf()">Show camera</button>
@@ -2160,20 +2152,28 @@ function showSelf(){
   document.getElementById('btn-show').style.display='none';
   document.getElementById('lbl-you').style.display='';
 }
-<\/script>
-</body></html>`);
-  popoutWin.document.close();
+</script>
+</body></html>`;
 
-  function assignStreams() {
+  const blob = new Blob([html], { type: 'text/html' });
+  const blobUrl = URL.createObjectURL(blob);
+
+  const w = 720, h = 460;
+  const left = Math.round(screen.width  / 2 - w / 2);
+  const top  = Math.round(screen.height / 2 - h / 2);
+  popoutWin = window.open(blobUrl, 'BeamVideoCall', `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no,scrollbars=no`);
+  if (!popoutWin) { URL.revokeObjectURL(blobUrl); toast('Pop-out blocked — allow popups for this site', true); return; }
+
+  // Assign streams once the popup has loaded its blob document
+  popoutWin.addEventListener('load', () => {
     try {
       const r = popoutWin.document.getElementById('pop-remote');
       const l = popoutWin.document.getElementById('pop-local');
-      if (r && remoteStream) r.srcObject = remoteStream;
-      if (l && localStream)  l.srcObject = localStream;
+      if (r && remoteEl.srcObject) r.srcObject = new MediaStream(remoteEl.srcObject.getTracks());
+      if (l && localEl.srcObject)  l.srcObject = new MediaStream(localEl.srcObject.getTracks());
     } catch(e) { console.log('Popout stream assign error:', e); }
-  }
-  setTimeout(assignStreams, 80);
-  setTimeout(assignStreams, 500); // retry in case first fires too early
+    URL.revokeObjectURL(blobUrl);
+  });
 
   popoutWin.onbeforeunload = () => { popoutWin = null; };
 }
