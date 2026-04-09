@@ -1715,13 +1715,6 @@ function createPeerConnection(config) {
       rv.srcObject.addTrack(e.track);
       rv.play().catch(err => console.log('Video play blocked:', err));
       document.getElementById('video-container').classList.add('active');
-      // Forward track to popout window if open — share the same srcObject reference
-      if (popoutWin && !popoutWin.closed) {
-        try {
-          const pr = popoutWin.document.getElementById('pop-remote');
-          if (pr) pr.srcObject = rv.srcObject;
-        } catch(err) { console.log('Popout track forward:', err); }
-      }
     }
     
     // Don't set inCall here — let startCall/joinCall manage that
@@ -2184,23 +2177,21 @@ document.addEventListener('fullscreenchange', () => {
 function popoutVideo() {
   if (popoutWin && !popoutWin.closed) { popoutWin.focus(); return; }
 
-  const remoteEl = document.getElementById('remote-video');
-  const localEl  = document.getElementById('local-video');
+  // Cross-window MediaStream assignment is blocked by Chrome regardless of origin
+  // when the stream belongs to an RTCPeerConnection. The only fully reliable approach
+  // is to copy video frames via canvas — draw parent <video> into popup <canvas>
+  // each animation frame. No MediaStream crosses the window boundary at all.
 
-  // Blob URL gives the popup the same origin as the parent — required for
-  // cross-window MediaStream assignment in Chrome.
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam \u2014 Video Call</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:#111;overflow:hidden;position:relative}
-/* Remote fills the entire window */
-#pop-remote{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
-/* Local as PiP in bottom-right corner */
-#pop-local{position:absolute;bottom:14px;right:14px;width:22%;min-width:90px;
-  border-radius:10px;object-fit:cover;border:2px solid rgba(255,255,255,.25);
-  cursor:pointer;transition:opacity .2s;z-index:2}
-#pop-local:hover{opacity:.75}
-#pop-local.hidden{opacity:0;pointer-events:none}
+#c-remote{position:absolute;inset:0;width:100%;height:100%;display:block}
+#c-local{position:absolute;bottom:14px;right:14px;width:22%;min-width:90px;
+  border-radius:10px;border:2px solid rgba(255,255,255,.25);cursor:pointer;
+  transition:opacity .2s;z-index:2;background:#222}
+#c-local:hover{opacity:.75}
+#c-local.hidden{opacity:0;pointer-events:none}
 .lbl{position:absolute;font-size:11px;color:#fff;background:rgba(0,0,0,.6);
   padding:2px 8px;border-radius:8px;pointer-events:none;z-index:3}
 #lbl-peer{bottom:14px;left:14px}
@@ -2211,19 +2202,19 @@ html,body{width:100%;height:100%;background:#111;overflow:hidden;position:relati
   justify-content:center;transition:all .15s;z-index:2}
 #btn-show:hover{background:rgba(255,255,255,.18);color:#fff}
 </style></head><body>
-<video id="pop-remote" autoplay playsinline></video>
-<video id="pop-local" autoplay playsinline muted title="Click to hide your camera"></video>
+<canvas id="c-remote"></canvas>
+<canvas id="c-local"></canvas>
 <div class="lbl" id="lbl-peer">Peer</div>
 <div class="lbl" id="lbl-you">You</div>
 <button id="btn-show" onclick="showSelf()">Show camera</button>
 <script>
-document.getElementById('pop-local').addEventListener('click',function(){
+document.getElementById('c-local').addEventListener('click',function(){
   this.classList.add('hidden');
   document.getElementById('btn-show').style.display='flex';
   document.getElementById('lbl-you').style.display='none';
 });
 function showSelf(){
-  document.getElementById('pop-local').classList.remove('hidden');
+  document.getElementById('c-local').classList.remove('hidden');
   document.getElementById('btn-show').style.display='none';
   document.getElementById('lbl-you').style.display='';
 }
@@ -2239,33 +2230,57 @@ function showSelf(){
   popoutWin = window.open(blobUrl, 'BeamVideoCall', `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no,scrollbars=no`);
   if (!popoutWin) { URL.revokeObjectURL(blobUrl); toast('Pop-out blocked — allow popups for this site', true); return; }
 
-  // Poll until the popup DOM is ready, then assign streams directly.
-  // Using addEventListener('load') on the popup ref is unreliable — the event
-  // may fire before the listener is attached. Direct srcObject sharing works
-  // because blob: URLs share the same origin as the parent page.
-  let attempts = 0;
-  const assignWhenReady = () => {
-    attempts++;
-    try {
-      if (!popoutWin || popoutWin.closed) return;
-      const r = popoutWin.document.getElementById('pop-remote');
-      const l = popoutWin.document.getElementById('pop-local');
-      if (!r || !l) {
-        if (attempts < 40) setTimeout(assignWhenReady, 100);
-        return;
-      }
-      // Assign srcObject directly — same origin means no cross-context restriction
-      if (remoteEl.srcObject) r.srcObject = remoteEl.srcObject;
-      if (localEl.srcObject)  l.srcObject = localEl.srcObject;
-      URL.revokeObjectURL(blobUrl);
-    } catch(e) {
-      console.log('Popout assign attempt', attempts, e.message);
-      if (attempts < 40) setTimeout(assignWhenReady, 100);
-    }
-  };
-  setTimeout(assignWhenReady, 150);
+  let rafId = null;
 
-  popoutWin.onbeforeunload = () => { popoutWin = null; };
+  const startDrawing = () => {
+    if (!popoutWin || popoutWin.closed) return;
+    const cr = popoutWin.document.getElementById('c-remote');
+    const cl = popoutWin.document.getElementById('c-local');
+    if (!cr || !cl) { setTimeout(startDrawing, 100); return; }
+
+    URL.revokeObjectURL(blobUrl);
+
+    const remoteEl = document.getElementById('remote-video');
+    const localEl  = document.getElementById('local-video');
+
+    const draw = () => {
+      if (!popoutWin || popoutWin.closed) { cancelAnimationFrame(rafId); rafId = null; return; }
+      try {
+        // Size canvases to match their CSS display size
+        const pw = popoutWin.innerWidth, ph = popoutWin.innerHeight;
+
+        // Remote: fill window
+        if (cr.width !== pw || cr.height !== ph) { cr.width = pw; cr.height = ph; }
+        if (remoteEl.readyState >= 2 && remoteEl.videoWidth) {
+          const ctx = cr.getContext('2d');
+          // Cover-fit: scale to fill canvas preserving aspect ratio
+          const vr = remoteEl.videoWidth / remoteEl.videoHeight;
+          const cr_r = pw / ph;
+          let sw, sh, sx, sy;
+          if (vr > cr_r) { sh = ph; sw = ph * vr; sx = (sw - pw) / 2; sy = 0; }
+          else           { sw = pw; sh = pw / vr; sx = 0; sy = (sh - ph) / 2; }
+          ctx.drawImage(remoteEl, -sx, -sy, sw, sh);
+        }
+
+        // Local PiP: match canvas aspect ratio to video
+        const localW = Math.round(pw * 0.22);
+        const localH = localEl.videoWidth ? Math.round(localW * localEl.videoHeight / localEl.videoWidth) : Math.round(localW * 0.75);
+        if (cl.width !== localW || cl.height !== localH) { cl.width = localW; cl.height = localH; }
+        if (localEl.readyState >= 2 && localEl.videoWidth) {
+          cl.getContext('2d').drawImage(localEl, 0, 0, localW, localH);
+        }
+      } catch(e) { /* popup may be navigating */ }
+      rafId = popoutWin.requestAnimationFrame(draw);
+    };
+    rafId = popoutWin.requestAnimationFrame(draw);
+  };
+
+  setTimeout(startDrawing, 200);
+
+  popoutWin.onbeforeunload = () => {
+    if (rafId) { try { popoutWin.cancelAnimationFrame(rafId); } catch {} rafId = null; }
+    popoutWin = null;
+  };
 }
 
 function updateCallUI() {
