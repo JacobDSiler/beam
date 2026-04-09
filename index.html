@@ -189,6 +189,13 @@ input::placeholder{color:var(--text3)}
 .item-expiry-badge.expiring-soon{color:#f59e0b;background:rgba(245,158,11,.15)}
 .item-expiry-badge.expired{color:var(--warn);background:rgba(255,107,107,.15)}
 
+.staged-chip{display:flex;align-items:center;gap:6px;padding:5px 10px;background:var(--surface2);
+  border:1px solid var(--surface3);border-radius:20px;font-size:12px;color:var(--text2);max-width:200px}
+.staged-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.staged-chip-remove{flex-shrink:0;width:16px;height:16px;border-radius:50%;background:var(--surface3);
+  border:none;color:var(--text3);cursor:pointer;font-size:11px;line-height:1;padding:0;
+  display:flex;align-items:center;justify-content:center;transition:all .15s}
+.staged-chip-remove:hover{background:var(--warn);color:#fff}
 .upload-progress{
   background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius-sm);
   padding:12px 16px;
@@ -475,11 +482,14 @@ input::placeholder{color:var(--text3)}
     </div>
 
     <div class="drop-zone" id="drop-zone">
-      <input type="file" multiple onchange="handleFiles(this.files)">
+      <input type="file" id="file-input" multiple onchange="stageFiles(this.files)">
       <div class="drop-zone-icon">&#x1f4c1;</div>
       <div class="drop-zone-text">Drop files here or tap to browse</div>
-      <div class="drop-zone-hint">Peer connected: unlimited size &middot; Cloud only: 700 KB max</div>
+      <div class="drop-zone-hint">Files are staged until you press Send</div>
     </div>
+
+    <!-- Staged files preview -->
+    <div id="staged-files-row" style="display:none;flex-wrap:wrap;gap:6px;padding:8px 0"></div>
 
     <div class="upload-progress" id="upload-progress" style="display:none">
       <div class="progress-text">
@@ -1212,7 +1222,7 @@ const CHUNK_SIZE = 16384; // 16 KB chunks for WebRTC
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('dragover'); stageFiles(e.dataTransfer.files); });
 
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
@@ -1232,27 +1242,55 @@ function readFileAsArrayBuffer(file) {
   });
 }
 
-async function handleFiles(files) {
-  if (!currentBox || !files.length) return;
+// ===================== STAGED FILES =====================
+let stagedFiles = []; // Array of File objects waiting to send
 
-  const itemPass = getItemPasscode();
-  const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
+function stageFiles(fileList) {
+  if (!fileList?.length) return;
+  for (const file of fileList) {
+    stagedFiles.push(file);
+  }
+  renderStagedFiles();
+  // Reset the file input so the same file can be added again if needed
+  document.getElementById('file-input').value = '';
+}
 
+function removeStagedFile(index) {
+  stagedFiles.splice(index, 1);
+  renderStagedFiles();
+}
+
+function renderStagedFiles() {
+  const row = document.getElementById('staged-files-row');
+  if (!stagedFiles.length) { row.style.display = 'none'; row.innerHTML = ''; return; }
+  row.style.display = 'flex';
+  row.innerHTML = stagedFiles.map((f, i) => `
+    <div class="staged-chip" title="${escapeHtml(f.name)} (${formatBytes(f.size)})">
+      <span>${fileIcon(f.name)} ${escapeHtml(f.name.length > 20 ? f.name.slice(0,18)+'…' : f.name)}</span>
+      <button class="staged-chip-remove" onclick="removeStagedFile(${i})" title="Remove">✕</button>
+    </div>`).join('');
+}
+
+function clearStagedFiles() {
+  stagedFiles = [];
+  renderStagedFiles();
+}
+
+// Send all staged files (called from sendMessage)
+async function sendStagedFiles(itemPassHash) {
+  if (!stagedFiles.length || !currentBox) return;
+  const files = [...stagedFiles];
+  clearStagedFiles();
   for (const file of files) {
     const rtcReady = peerConnected && dataChannel?.readyState === 'open';
-
     if (rtcReady) {
-      // === RTC PATH — unlimited file size, direct to peer ===
       await sendFileViaRTC(file, itemPassHash);
     } else if (file.size <= MAX_FILE_BYTES) {
-      // === FIRESTORE PATH — small files when no peer ===
       await sendFileViaFirestore(file, itemPassHash);
     } else {
-      // === TOO LARGE, NO PEER ===
-      toast(`${file.name} (${formatBytes(file.size)}) is too large for cloud. Wait for a peer to connect for direct transfer.`, true);
+      toast(`${file.name} is too large for cloud. Connect a peer for direct transfer.`, true);
     }
   }
-  clearItemPasscode(); clearItemExpiry();
 }
 
 // ---- RTC chunked file send ----
@@ -1421,11 +1459,21 @@ async function sendMessage() {
   const input = document.getElementById('msg-input');
   const text = input.value.trim();
   const hasMedia = !!recBlob;
-  if (!text && !hasMedia) return;
+  const hasFiles = stagedFiles.length > 0;
+  if (!text && !hasMedia && !hasFiles) return;
   if (!currentBox) return;
 
   const itemPass = getItemPasscode();
   const itemPassHash = itemPass ? await hashPasscode(itemPass) : null;
+
+  // Files-only path — no text or media recording, just dispatch staged files
+  if (!text && !hasMedia && hasFiles) {
+    input.value = '';
+    clearItemPasscode(); clearItemExpiry();
+    await sendStagedFiles(itemPassHash);
+    clearStagedFiles();
+    return;
+  }
 
   // Grab media before clearing
   let mediaBlob = null, mediaType = null;
@@ -1469,6 +1517,8 @@ async function sendMessage() {
           toast('Sent — media via direct transfer');
           notifySubscribers('message + ' + mediaType, itemPassHash ? '(protected content)' : (text?.substring(0, 30) || mediaType + ' message'));
           clearItemPasscode(); clearItemExpiry();
+          await sendStagedFiles(itemPassHash);
+          clearStagedFiles();
           return;
         } else {
           toast('Media too large for cloud (700 KB). Send text only, or wait for peer.', true);
@@ -1480,6 +1530,8 @@ async function sendMessage() {
             toast('Text sent (media skipped — too large)');
           }
           clearItemPasscode(); clearItemExpiry();
+          await sendStagedFiles(itemPassHash);
+          clearStagedFiles();
           return;
         }
       }
@@ -1510,6 +1562,9 @@ async function sendMessage() {
     toast(hasMedia ? (text ? 'Message + ' + mediaType + ' sent' : mediaType.charAt(0).toUpperCase() + mediaType.slice(1) + ' message sent') : 'Message sent');
     notifySubscribers(itemData.type, itemPassHash ? '(protected content)' : (text || mediaType + ' message').substring(0, 50));
     clearItemPasscode(); clearItemExpiry();
+    // Send staged files under the same passcode as the message
+    await sendStagedFiles(itemPassHash);
+    clearStagedFiles();
   } catch (e) {
     console.error(e);
     toast('Failed to send: ' + (e.code || e.message), true);
@@ -1649,6 +1704,13 @@ function createPeerConnection(config) {
       rv.srcObject.addTrack(e.track);
       rv.play().catch(err => console.log('Video play blocked:', err));
       document.getElementById('video-container').classList.add('active');
+      // Forward track to popout window if open
+      if (popoutWin && !popoutWin.closed) {
+        try {
+          const pr = popoutWin.document.getElementById('pop-remote');
+          if (pr) { if (!pr.srcObject) pr.srcObject = new MediaStream(); pr.srcObject.addTrack(e.track); }
+        } catch(err) { console.log('Popout track forward:', err); }
+      }
     }
     
     // Don't set inCall here — let startCall/joinCall manage that
@@ -2114,30 +2176,32 @@ function popoutVideo() {
   const remoteEl = document.getElementById('remote-video');
   const localEl  = document.getElementById('local-video');
 
-  // Build popup HTML as a Blob URL — this gives the popup the same effective
-  // origin as the parent page, which is required for cross-window MediaStream
-  // assignment. about:blank (produced by document.write) is a different context
-  // and Chrome blocks MediaStreamTrack use across it.
+  // Blob URL gives the popup the same origin as the parent — required for
+  // cross-window MediaStream assignment in Chrome.
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam \u2014 Video Call</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#111;height:100vh;overflow:hidden;position:relative}
-#pop-remote{width:100%;height:100%;object-fit:cover;display:block}
-#pop-local{position:absolute;bottom:14px;right:14px;width:22%;min-width:90px;border-radius:10px;
-  object-fit:cover;border:2px solid rgba(255,255,255,.25);cursor:pointer;transition:opacity .2s}
+html,body{width:100%;height:100%;background:#111;overflow:hidden;position:relative}
+/* Remote fills the entire window */
+#pop-remote{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+/* Local as PiP in bottom-right corner */
+#pop-local{position:absolute;bottom:14px;right:14px;width:22%;min-width:90px;
+  border-radius:10px;object-fit:cover;border:2px solid rgba(255,255,255,.25);
+  cursor:pointer;transition:opacity .2s;z-index:2}
 #pop-local:hover{opacity:.75}
 #pop-local.hidden{opacity:0;pointer-events:none}
-.lbl{position:absolute;font-size:11px;color:#fff;background:rgba(0,0,0,.6);padding:2px 8px;border-radius:8px;pointer-events:none}
+.lbl{position:absolute;font-size:11px;color:#fff;background:rgba(0,0,0,.6);
+  padding:2px 8px;border-radius:8px;pointer-events:none;z-index:3}
 #lbl-peer{bottom:14px;left:14px}
 #lbl-you{bottom:14px;right:calc(22% + 20px)}
 #btn-show{position:absolute;bottom:14px;right:14px;width:22%;min-width:90px;padding:8px;
   background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:10px;
   color:rgba(255,255,255,.6);font-size:11px;cursor:pointer;display:none;align-items:center;
-  justify-content:center;transition:all .15s}
+  justify-content:center;transition:all .15s;z-index:2}
 #btn-show:hover{background:rgba(255,255,255,.18);color:#fff}
 </style></head><body>
 <video id="pop-remote" autoplay playsinline></video>
-<video id="pop-local" autoplay playsinline muted title="Click to hide"></video>
+<video id="pop-local" autoplay playsinline muted title="Click to hide your camera"></video>
 <div class="lbl" id="lbl-peer">Peer</div>
 <div class="lbl" id="lbl-you">You</div>
 <button id="btn-show" onclick="showSelf()">Show camera</button>
@@ -2158,19 +2222,24 @@ function showSelf(){
   const blob = new Blob([html], { type: 'text/html' });
   const blobUrl = URL.createObjectURL(blob);
 
-  const w = 720, h = 460;
+  const w = 720, h = 480;
   const left = Math.round(screen.width  / 2 - w / 2);
   const top  = Math.round(screen.height / 2 - h / 2);
   popoutWin = window.open(blobUrl, 'BeamVideoCall', `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no,scrollbars=no`);
   if (!popoutWin) { URL.revokeObjectURL(blobUrl); toast('Pop-out blocked — allow popups for this site', true); return; }
 
-  // Assign streams once the popup has loaded its blob document
+  // Assign streams once the popup's blob document has loaded
   popoutWin.addEventListener('load', () => {
     try {
       const r = popoutWin.document.getElementById('pop-remote');
       const l = popoutWin.document.getElementById('pop-local');
-      if (r && remoteEl.srcObject) r.srcObject = new MediaStream(remoteEl.srcObject.getTracks());
-      if (l && localEl.srcObject)  l.srcObject = new MediaStream(localEl.srcObject.getTracks());
+      // Clone existing tracks into fresh MediaStreams for cross-window assignment
+      if (r && remoteEl.srcObject && remoteEl.srcObject.getTracks().length) {
+        r.srcObject = new MediaStream(remoteEl.srcObject.getTracks());
+      }
+      if (l && localEl.srcObject && localEl.srcObject.getTracks().length) {
+        l.srcObject = new MediaStream(localEl.srcObject.getTracks());
+      }
     } catch(e) { console.log('Popout stream assign error:', e); }
     URL.revokeObjectURL(blobUrl);
   });
