@@ -287,6 +287,19 @@ input::placeholder{color:var(--text3)}
   transition:background .15s;padding:0;
 }
 .video-overlay-btn:hover{background:rgba(0,0,0,.85)}
+/* Hide-self toggle on local video box */
+.video-self-hide{
+  position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:5px;
+  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12);
+  color:rgba(255,255,255,.7);cursor:pointer;display:flex;align-items:center;
+  justify-content:center;padding:0;transition:all .15s;z-index:5;
+}
+.video-self-hide:hover{background:rgba(0,0,0,.85);color:#fff}
+/* When self-view is hidden, collapse the box to a small tab */
+#video-box-local.self-hidden{max-width:32px !important;overflow:hidden;cursor:pointer}
+#video-box-local.self-hidden video{opacity:0}
+#video-box-local.self-hidden .video-label{display:none}
+#video-box-local.self-hidden .video-self-hide{top:50%;left:50%;transform:translate(-50%,-50%);right:auto}
 
 /* === VOICE RECORD === */
 .voice-record-btn{flex-shrink:0}
@@ -438,6 +451,9 @@ input::placeholder{color:var(--text3)}
       <div class="video-box" id="video-box-local" style="max-width:35%">
         <video id="local-video" autoplay playsinline muted></video>
         <div class="video-label">You</div>
+        <button class="video-self-hide" id="btn-hide-self" onclick="toggleSelfView()" title="Hide your video">
+          <svg id="self-hide-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
       </div>
       <div class="video-overlay-btns">
         <button class="video-overlay-btn" onclick="popoutVideo()" title="Pop out to window">
@@ -2054,6 +2070,16 @@ function toggleCamera() {
 }
 
 let popoutWin = null;
+let selfViewHidden = false;
+
+function toggleSelfView() {
+  selfViewHidden = !selfViewHidden;
+  const box = document.getElementById('video-box-local');
+  box.classList.toggle('self-hidden', selfViewHidden);
+  document.getElementById('self-hide-icon').innerHTML = selfViewHidden
+    ? '<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>'
+    : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+}
 
 function fullscreenVideo() {
   const vc = document.getElementById('video-container');
@@ -2076,44 +2102,69 @@ document.addEventListener('fullscreenchange', () => {
 function popoutVideo() {
   if (popoutWin && !popoutWin.closed) { popoutWin.focus(); return; }
 
-  const remoteStream = document.getElementById('remote-video').srcObject;
-  const localStream = document.getElementById('local-video').srcObject;
+  // Use captureStream() on the <video> elements rather than their srcObject.
+  // Assigning a PeerConnection-owned MediaStream directly to a cross-window
+  // video element fails silently in Chrome — captureStream() produces a new
+  // MediaStream from the rendered frames that transfers reliably cross-window.
+  const remoteEl = document.getElementById('remote-video');
+  const localEl  = document.getElementById('local-video');
+  const remoteStream = (remoteEl.captureStream || remoteEl.mozCaptureStream)?.call(remoteEl);
+  const localStream  = (localEl.captureStream  || localEl.mozCaptureStream)?.call(localEl);
 
-  const w = 640, h = 420;
-  const left = Math.round(screen.width / 2 - w / 2);
-  const top = Math.round(screen.height / 2 - h / 2);
+  const w = 720, h = 460;
+  const left = Math.round(screen.width  / 2 - w / 2);
+  const top  = Math.round(screen.height / 2 - h / 2);
   popoutWin = window.open('', 'BeamVideoCall', `width=${w},height=${h},left=${left},top=${top},resizable=yes,toolbar=no,menubar=no,scrollbars=no`);
   if (!popoutWin) { toast('Pop-out blocked — allow popups for this site', true); return; }
 
-  popoutWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam — Video Call</title>
+  popoutWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam \u2014 Video Call</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;display:flex;gap:4px;height:100vh;overflow:hidden}
-#pop-remote{flex:1;object-fit:cover;height:100%}
-#pop-local{position:absolute;bottom:12px;right:12px;width:25%;border-radius:8px;object-fit:cover;border:2px solid rgba(255,255,255,.2)}
-.lbl{position:absolute;font-size:11px;color:#fff;background:rgba(0,0,0,.6);padding:2px 8px;border-radius:8px}
-#lbl-r{bottom:12px;left:12px}
-#lbl-l{bottom:12px;right:calc(25% + 16px)}
+body{background:#111;height:100vh;overflow:hidden;position:relative}
+#pop-remote{width:100%;height:100%;object-fit:cover;display:block}
+#pop-local{position:absolute;bottom:14px;right:14px;width:22%;min-width:90px;border-radius:10px;
+  object-fit:cover;border:2px solid rgba(255,255,255,.25);cursor:pointer;transition:opacity .2s}
+#pop-local:hover{opacity:.75}
+#pop-local.hidden{opacity:0;pointer-events:none}
+.lbl{position:absolute;font-size:11px;color:#fff;background:rgba(0,0,0,.6);padding:2px 8px;border-radius:8px;pointer-events:none}
+#lbl-peer{bottom:14px;left:14px}
+#lbl-you{bottom:14px;right:calc(22% + 20px)}
+#btn-show{position:absolute;bottom:14px;right:14px;width:22%;min-width:90px;padding:8px;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:10px;
+  color:rgba(255,255,255,.6);font-size:11px;cursor:pointer;display:none;align-items:center;
+  justify-content:center;transition:all .15s}
+#btn-show:hover{background:rgba(255,255,255,.18);color:#fff}
 </style></head><body>
 <video id="pop-remote" autoplay playsinline></video>
-<video id="pop-local" autoplay playsinline muted></video>
-<div class="lbl" id="lbl-r">Peer</div>
-<div class="lbl" id="lbl-l">You</div>
+<video id="pop-local" autoplay playsinline muted title="Click to hide your camera"></video>
+<div class="lbl" id="lbl-peer">Peer</div>
+<div class="lbl" id="lbl-you">You</div>
+<button id="btn-show" onclick="showSelf()">Show camera</button>
+<script>
+document.getElementById('pop-local').addEventListener('click',function(){
+  this.classList.add('hidden');
+  document.getElementById('btn-show').style.display='flex';
+  document.getElementById('lbl-you').style.display='none';
+});
+function showSelf(){
+  document.getElementById('pop-local').classList.remove('hidden');
+  document.getElementById('btn-show').style.display='none';
+  document.getElementById('lbl-you').style.display='';
+}
+<\/script>
 </body></html>`);
   popoutWin.document.close();
 
-  // Assign streams after the window has rendered
-  popoutWin.onload = () => {
-    if (remoteStream) popoutWin.document.getElementById('pop-remote').srcObject = remoteStream;
-    if (localStream) popoutWin.document.getElementById('pop-local').srcObject = localStream;
-  };
-  // Fallback for browsers that fire load before onload is set
-  setTimeout(() => {
+  function assignStreams() {
     try {
-      if (remoteStream) popoutWin.document.getElementById('pop-remote').srcObject = remoteStream;
-      if (localStream) popoutWin.document.getElementById('pop-local').srcObject = localStream;
-    } catch {}
-  }, 200);
+      const r = popoutWin.document.getElementById('pop-remote');
+      const l = popoutWin.document.getElementById('pop-local');
+      if (r && remoteStream) r.srcObject = remoteStream;
+      if (l && localStream)  l.srcObject = localStream;
+    } catch(e) { console.log('Popout stream assign error:', e); }
+  }
+  setTimeout(assignStreams, 80);
+  setTimeout(assignStreams, 500); // retry in case first fires too early
 
   popoutWin.onbeforeunload = () => { popoutWin = null; };
 }
