@@ -140,9 +140,41 @@ input::placeholder{color:var(--text3)}
 .item-list{display:flex;flex-direction:column;gap:8px}
 .item-card{
   background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius-sm);
-  padding:14px 16px;display:flex;align-items:center;gap:12px;transition:border .2s;
+  padding:14px 16px;display:flex;align-items:flex-start;gap:12px;transition:border .2s;
+  position:relative;margin-bottom:6px;
 }
 .item-card:hover{border-color:var(--surface3)}
+.item-react-btn{
+  position:absolute;bottom:-11px;left:44px;
+  width:22px;height:22px;border-radius:50%;
+  background:var(--surface2);border:1px solid var(--surface3);
+  font-size:12px;line-height:1;cursor:pointer;
+  display:none;align-items:center;justify-content:center;
+  color:var(--text3);transition:all .15s;z-index:5;padding:0;
+}
+.item-react-btn:hover{background:var(--surface3);color:var(--text);border-color:var(--beam)}
+.item-card:hover .item-react-btn{display:flex}
+.emoji-picker{
+  position:absolute;bottom:22px;left:44px;
+  background:var(--surface2);border:1px solid var(--surface3);border-radius:12px;
+  padding:8px 10px;display:flex;gap:4px;z-index:20;
+  box-shadow:0 4px 20px rgba(0,0,0,.5);
+}
+.emoji-picker button{
+  font-size:20px;background:none;border:none;cursor:pointer;
+  border-radius:8px;padding:4px 6px;transition:background .1s,transform .1s;line-height:1;
+}
+.emoji-picker button:hover{background:var(--surface3);transform:scale(1.25)}
+.item-reactions{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.reaction-pill{
+  display:inline-flex;align-items:center;gap:3px;
+  padding:2px 8px;border-radius:20px;font-size:13px;
+  background:var(--surface2);border:1px solid var(--surface3);
+  cursor:pointer;transition:all .15s;user-select:none;
+}
+.reaction-pill:hover{border-color:var(--beam);background:var(--beam-glow)}
+.reaction-pill.reacted{border-color:var(--beam);background:var(--beam-glow)}
+.reaction-pill .r-count{font-size:11px;color:var(--text2);font-family:var(--font-mono)}
 .item-icon{font-size:22px;flex-shrink:0;width:36px;text-align:center}
 .item-info{flex:1;min-width:0}
 .item-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -941,9 +973,12 @@ function renderItem(item) {
   const isUnlocked = unlockedItems.has(item.id);
   const isRTCOnly = item.sentViaRTC && !item.fileData;
   div.className = 'item-card' + (isLocked && !isUnlocked ? ' locked' : '');
+  div.dataset.itemId = item.id;
 
   const lockBadge = isLocked ? `<div class="item-locked-badge">&#x1f512; Protected</div>` : '';
   const rtcBadge = isRTCOnly ? `<div class="item-locked-badge" style="color:var(--beam);background:var(--beam-dim)">⚡ Direct</div>` : '';
+  // Reaction button + existing reaction pills — appended after innerHTML is set
+  const reactBtn = `<button class="item-react-btn" onclick="toggleReactionPicker('${item.id}')" title="Add reaction">＋</button>`;
 
   // Expiry badge
   let expiryBadge = '';
@@ -1014,6 +1049,15 @@ function renderItem(item) {
         <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','file')">&#x1f5d1;</button>
       </div>`;
   }
+
+  // Inject reactions row into item-info, and the floating react button
+  const rHtml = reactionsHtml(item);
+  if (rHtml) {
+    const info = div.querySelector('.item-info');
+    if (info) info.insertAdjacentHTML('beforeend', rHtml);
+  }
+  div.insertAdjacentHTML('beforeend', reactBtn);
+
   return div;
 }
 
@@ -2710,6 +2754,91 @@ function startExpirySweeper(code) {
 
 function stopExpirySweeper() {
   if (expirySweeperInterval) { clearInterval(expirySweeperInterval); expirySweeperInterval = null; }
+}
+
+// ===================== REACTIONS =====================
+const REACTION_EMOJIS = ['👍','❤️','😂','😮','😢','🔥'];
+let openPickerId = null; // itemId of currently open picker
+
+function reactionsHtml(item) {
+  const reactions = item.reactions || {};
+  const pills = Object.entries(reactions)
+    .filter(([, count]) => count > 0)
+    .map(([emoji, count]) => {
+      const key = `${currentBox?.code}:${item.id}:${emoji}`;
+      const reacted = sessionStorage.getItem(key) === '1';
+      return `<button class="reaction-pill${reacted ? ' reacted' : ''}" onclick="toggleReaction('${item.id}','${emoji}')" title="${emoji}">${emoji} <span class="r-count">${count}</span></button>`;
+    }).join('');
+  return pills ? `<div class="item-reactions">${pills}</div>` : '';
+}
+
+function reactionPickerHtml(itemId) {
+  const btns = REACTION_EMOJIS.map(e =>
+    `<button onclick="addReaction('${itemId}','${e}')" title="${e}">${e}</button>`
+  ).join('');
+  return `<div class="emoji-picker" id="picker-${itemId}">${btns}</div>`;
+}
+
+function toggleReactionPicker(itemId) {
+  // Close any open picker first
+  if (openPickerId && openPickerId !== itemId) {
+    closeReactionPicker(openPickerId);
+  }
+  const existing = document.getElementById('picker-' + itemId);
+  if (existing) { closeReactionPicker(itemId); return; }
+
+  const card = document.querySelector(`[data-item-id="${itemId}"]`);
+  if (!card) return;
+  card.insertAdjacentHTML('beforeend', reactionPickerHtml(itemId));
+  openPickerId = itemId;
+
+  // Close on outside click
+  setTimeout(() => {
+    document.addEventListener('click', function handler(e) {
+      if (!e.target.closest('.emoji-picker') && !e.target.closest('.item-react-btn')) {
+        closeReactionPicker(itemId);
+        document.removeEventListener('click', handler);
+      }
+    });
+  }, 10);
+}
+
+function closeReactionPicker(itemId) {
+  const picker = document.getElementById('picker-' + itemId);
+  if (picker) picker.remove();
+  if (openPickerId === itemId) openPickerId = null;
+}
+
+async function addReaction(itemId, emoji) {
+  closeReactionPicker(itemId);
+  if (!currentBox) return;
+  const key = `${currentBox.code}:${itemId}:${emoji}`;
+  // Don't allow adding same reaction twice in same session
+  if (sessionStorage.getItem(key) === '1') return;
+  sessionStorage.setItem(key, '1');
+  try {
+    await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId)
+      .update({ [`reactions.${emoji}`]: firebase.firestore.FieldValue.increment(1) });
+  } catch(e) {
+    sessionStorage.removeItem(key);
+    toast('Reaction failed', true);
+  }
+}
+
+async function toggleReaction(itemId, emoji) {
+  if (!currentBox) return;
+  const key = `${currentBox.code}:${itemId}:${emoji}`;
+  const alreadyReacted = sessionStorage.getItem(key) === '1';
+  if (alreadyReacted) {
+    // Remove reaction
+    sessionStorage.removeItem(key);
+    try {
+      await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId)
+        .update({ [`reactions.${emoji}`]: firebase.firestore.FieldValue.increment(-1) });
+    } catch(e) { sessionStorage.setItem(key, '1'); toast('Reaction failed', true); }
+  } else {
+    await addReaction(itemId, emoji);
+  }
 }
 
 // ===================== HELPERS =====================
