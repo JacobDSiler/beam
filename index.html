@@ -335,11 +335,11 @@ input::placeholder{color:var(--text3)}
   animation:spin 1s linear infinite;
 }
 .call-bar{
-  display:none;flex-direction:column;gap:10px;padding:14px 16px;
+  display:flex;flex-direction:column;gap:10px;padding:14px 16px;
   border-radius:var(--radius-sm);background:var(--surface);border:1px solid var(--surface3);
 }
-.call-bar.active{display:flex}
 .call-bar.in-call{border-color:var(--success);background:rgba(74,222,128,.05)}
+.call-bar.is-waiting{border-color:var(--beam);animation:call-pulse 2s ease infinite}
 .call-controls{display:flex;align-items:center;gap:8px}
 .call-btn{
   width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;
@@ -565,7 +565,7 @@ input::placeholder{color:var(--text3)}
         <video id="remote-video" autoplay playsinline></video>
         <div class="video-label">Peer</div>
         <!-- Waiting overlay shown while caller waits for peer to join -->
-        <div id="call-waiting-overlay" style="display:none;position:absolute;inset:0;background:rgba(0,0,0,.75);display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:4">
+        <div id="call-waiting-overlay" style="position:absolute;inset:0;background:rgba(0,0,0,.75);display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:4">
           <div class="call-wait-spinner"></div>
           <div style="color:#fff;font-size:13px;font-weight:600;letter-spacing:.3px">Waiting for peer…</div>
           <div id="call-wait-timer" style="font-family:var(--font-mono);font-size:11px;color:rgba(255,255,255,.5)">00:00</div>
@@ -971,7 +971,7 @@ function enterMailbox(code) {
   updateStorageMeter();
   startExpirySweeper(code);
   listenForWaitingCall(code);
-  // Update subscribe button state
+  updateCallUI();
   const saved = localStorage.getItem('beam_sub_' + code);
   const subBtn = document.getElementById('btn-subscribe');
   if (saved) {
@@ -2055,8 +2055,7 @@ function updatePeerStatus() {
   const callBar = document.getElementById('call-bar');
   el.className = 'connection-status ' + (peerConnected ? 'peer-connected' : 'peer-disconnected');
   text.textContent = peerConnected ? 'Peer connected — unlimited direct transfer' : 'No peer — cloud storage only (700 KB limit)';
-  // Show call bar when peer connected OR when waiting (so end/cancel button is visible)
-  callBar.classList.toggle('active', peerConnected || isWaiting);
+  callBar.classList.toggle('is-waiting', isWaiting && !inCall);
   if (!peerConnected && inCall) endCall();
   // Peer just connected while we were waiting — promote to a real call
   if (peerConnected && isWaiting) promoteWaitingToCall();
@@ -2571,7 +2570,9 @@ function updateCallUI() {
   bar.classList.toggle('is-waiting', isWaiting && !inCall);
   document.getElementById('btn-call-start').style.display = activeOrWaiting ? 'none' : 'flex';
   document.getElementById('btn-video-start').style.display = activeOrWaiting ? 'none' : 'flex';
-  document.getElementById('call-status').style.display = activeOrWaiting ? 'none' : 'block';
+  const statusEl = document.getElementById('call-status');
+  statusEl.style.display = activeOrWaiting ? 'none' : 'block';
+  statusEl.textContent = peerConnected ? 'Call peer' : 'Start call (peer will be notified)';
   document.getElementById('call-timer').style.display = inCall ? 'inline' : 'none';
   document.getElementById('btn-mute').style.display = inCall ? 'flex' : 'none';
   // Show end/cancel button during both call and wait
