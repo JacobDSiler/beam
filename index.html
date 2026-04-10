@@ -200,6 +200,19 @@ input::placeholder{color:var(--text3)}
 .item-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item-meta{font-size:11px;color:var(--text3);margin-top:2px}
 .item-msg{font-size:13px;color:var(--text);line-height:1.4;padding:4px 0;word-break:break-word}
+/* Inline edit textarea */
+.item-edit-wrap{display:flex;flex-direction:column;gap:6px;width:100%}
+.item-edit-area{
+  width:100%;min-height:56px;padding:8px 10px;
+  background:var(--surface3);border:1px solid var(--beam);border-radius:var(--radius-sm);
+  color:var(--text);font-family:var(--font-sans);font-size:13px;line-height:1.4;
+  resize:vertical;outline:none;
+}
+.item-edit-actions{display:flex;gap:6px}
+.item-edit-save{padding:5px 14px;border-radius:6px;background:var(--beam);color:#000;font-weight:700;font-size:12px;border:none;cursor:pointer;font-family:var(--font-sans)}
+.item-edit-save:hover{opacity:.85}
+.item-edit-cancel{padding:5px 12px;border-radius:6px;background:var(--surface3);color:var(--text2);font-size:12px;border:none;cursor:pointer;font-family:var(--font-sans)}
+.item-edit-cancel:hover{background:var(--surface2)}
 .file-preview-img{margin:6px 0 4px;border-radius:6px;overflow:hidden;max-width:220px;line-height:0}
 .file-preview-img img{width:100%;max-height:140px;object-fit:cover;border-radius:6px;display:block}
 .file-preview-text{margin:6px 0 4px;background:var(--surface3);border-radius:6px;padding:7px 10px;max-width:280px;overflow:hidden}
@@ -1117,9 +1130,13 @@ function renderItem(item) {
     const msgContent = isLocked && !isUnlocked ? '••••••••••••' : linkify(escapeHtml(item.text));
     const unlockBtn = isLocked && !isUnlocked
       ? `<button class="btn-icon" title="Unlock" onclick="promptItemUnlock('${item.id}','view')">&#x1f513;</button>` : '';
+    const editBtn = (!isLocked || isUnlocked)
+      ? `<button class="btn-icon" title="Edit message" onclick="startEditMessage('${item.id}')">&#x270f;&#xfe0f;</button>` : '';
+    const editedTag = item.editedAt ? `<span style="color:var(--text3);font-size:10px"> · edited</span>` : '';
+    if (item.text) div.dataset.msgText = item.text; // raw text for edit textarea
     div.innerHTML = `<div class="item-icon">&#x1f4ac;</div>
-      <div class="item-info"><div class="item-msg">${msgContent}</div>${lockBadge}${expiryBadge}<div class="item-meta">${timeAgo(item.createdAt?.toDate())}</div></div>
-      <div class="item-actions">${unlockBtn}<button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','message')">&#x1f5d1;</button></div>`;
+      <div class="item-info"><div class="item-msg" id="msg-text-${item.id}">${msgContent}</div>${lockBadge}${expiryBadge}<div class="item-meta">${timeAgo(item.createdAt?.toDate())}${editedTag}</div></div>
+      <div class="item-actions">${unlockBtn}${editBtn}<button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','message')">&#x1f5d1;</button></div>`;
   } else {
     const nameDisplay = isLocked && !isUnlocked ? '&#x1f512; Protected file' : escapeHtml(item.fileName);
     const preview = (!isLocked || isUnlocked) ? filePreviewHtml(item) : '';
@@ -2997,6 +3014,73 @@ function startExpirySweeper(code) {
 
 function stopExpirySweeper() {
   if (expirySweeperInterval) { clearInterval(expirySweeperInterval); expirySweeperInterval = null; }
+}
+
+// ===================== EDIT MESSAGE =====================
+let editingItemId = null;
+
+function startEditMessage(itemId) {
+  // Only one edit at a time — cancel any open edit first
+  if (editingItemId && editingItemId !== itemId) cancelEditMessage(editingItemId);
+
+  const msgEl = document.getElementById('msg-text-' + itemId);
+  if (!msgEl) return;
+
+  // Get the raw text from Firestore snapshot held in the card dataset
+  const card = document.querySelector(`[data-item-id="${itemId}"]`);
+  const rawText = card?.dataset.msgText || msgEl.textContent;
+
+  editingItemId = itemId;
+  msgEl.style.display = 'none';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'item-edit-wrap';
+  wrap.id = 'edit-wrap-' + itemId;
+  wrap.innerHTML = `
+    <textarea class="item-edit-area" id="edit-area-${itemId}" rows="2">${escapeHtml(rawText)}</textarea>
+    <div class="item-edit-actions">
+      <button class="item-edit-save" onclick="saveEditMessage('${itemId}')">Save</button>
+      <button class="item-edit-cancel" onclick="cancelEditMessage('${itemId}')">Cancel</button>
+    </div>`;
+  msgEl.insertAdjacentElement('afterend', wrap);
+
+  // Focus and move cursor to end
+  const ta = document.getElementById('edit-area-' + itemId);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+
+  // Save on Ctrl/Cmd+Enter
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEditMessage(itemId); }
+    if (e.key === 'Escape') { e.preventDefault(); cancelEditMessage(itemId); }
+  });
+}
+
+async function saveEditMessage(itemId) {
+  const ta = document.getElementById('edit-area-' + itemId);
+  if (!ta) return;
+  const newText = ta.value.trim();
+  if (!newText) { toast('Message cannot be empty', true); return; }
+  if (!currentBox) return;
+
+  try {
+    await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).update({
+      text: newText,
+      editedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    // Firestore listener re-renders the item — clean up optimistically
+    cancelEditMessage(itemId);
+  } catch(e) {
+    toast('Edit failed: ' + (e.code || e.message), true);
+  }
+}
+
+function cancelEditMessage(itemId) {
+  const wrap = document.getElementById('edit-wrap-' + itemId);
+  if (wrap) wrap.remove();
+  const msgEl = document.getElementById('msg-text-' + itemId);
+  if (msgEl) msgEl.style.display = '';
+  if (editingItemId === itemId) editingItemId = null;
 }
 
 // ===================== REACTIONS =====================
