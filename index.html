@@ -305,6 +305,35 @@ input::placeholder{color:var(--text3)}
 .error-banner code{font-family:var(--font-mono);font-size:11px;background:rgba(255,107,107,.15);padding:2px 6px;border-radius:4px}
 
 /* === CALL BAR === */
+/* Incoming call banner */
+#incoming-call-banner{
+  display:none;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:4px;
+  animation:icb-slide-in .25s ease;
+}
+#incoming-call-banner.active{display:block}
+@keyframes icb-slide-in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+#incoming-call-inner{
+  display:flex;align-items:center;gap:10px;padding:12px 16px;
+  background:linear-gradient(135deg,#1a2a1a,#0f1f0f);
+  border:1px solid rgba(74,222,128,.35);border-radius:var(--radius-sm);
+}
+.icb-btn{
+  padding:7px 16px;border-radius:8px;font-size:13px;font-weight:700;
+  cursor:pointer;border:none;flex-shrink:0;transition:all .15s;font-family:var(--font-sans);
+}
+.icb-accept{background:var(--success);color:#000}
+.icb-accept:hover{box-shadow:0 0 14px rgba(74,222,128,.5);transform:translateY(-1px)}
+.icb-decline{background:var(--surface3);color:var(--text2)}
+.icb-decline:hover{background:var(--warn);color:#fff}
+/* Waiting spinner on remote video */
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes call-pulse{0%,100%{opacity:.6}50%{opacity:1}}
+.call-wait-spinner{
+  width:44px;height:44px;border-radius:50%;
+  border:3px solid rgba(255,255,255,.15);
+  border-top-color:var(--beam);
+  animation:spin 1s linear infinite;
+}
 .call-bar{
   display:none;flex-direction:column;gap:10px;padding:14px 16px;
   border-radius:var(--radius-sm);background:var(--surface);border:1px solid var(--surface3);
@@ -493,6 +522,21 @@ input::placeholder{color:var(--text3)}
       </div>
     </div>
 
+    <!-- Incoming call banner -->
+    <div id="incoming-call-banner" style="display:none">
+      <div id="incoming-call-inner">
+        <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+          <span id="incoming-call-icon" style="font-size:22px">📹</span>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:#fff">Incoming call</div>
+            <div id="incoming-call-sub" style="font-size:11px;color:rgba(255,255,255,.6)">Peer is calling…</div>
+          </div>
+        </div>
+        <button class="icb-btn icb-accept" id="btn-accept-call" onclick="acceptCall()">Accept</button>
+        <button class="icb-btn icb-decline" onclick="declineCall()">Decline</button>
+      </div>
+    </div>
+
     <div class="connection-status peer-disconnected" id="peer-status">
       <div class="status-dot"></div>
       <span id="peer-status-text">No peer connected — using cloud storage</span>
@@ -520,6 +564,12 @@ input::placeholder{color:var(--text3)}
       <div class="video-box" id="video-box-remote">
         <video id="remote-video" autoplay playsinline></video>
         <div class="video-label">Peer</div>
+        <!-- Waiting overlay shown while caller waits for peer to join -->
+        <div id="call-waiting-overlay" style="display:none;position:absolute;inset:0;background:rgba(0,0,0,.75);display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:4">
+          <div class="call-wait-spinner"></div>
+          <div style="color:#fff;font-size:13px;font-weight:600;letter-spacing:.3px">Waiting for peer…</div>
+          <div id="call-wait-timer" style="font-family:var(--font-mono);font-size:11px;color:rgba(255,255,255,.5)">00:00</div>
+        </div>
         <div class="video-overlay-btns">
           <button class="video-overlay-btn" onclick="popoutVideo()" title="Pop out to window">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
@@ -920,6 +970,7 @@ function enterMailbox(code) {
   initWebRTC(code);
   updateStorageMeter();
   startExpirySweeper(code);
+  listenForWaitingCall(code);
   // Update subscribe button state
   const saved = localStorage.getItem('beam_sub_' + code);
   const subBtn = document.getElementById('btn-subscribe');
@@ -937,6 +988,10 @@ function enterMailbox(code) {
 function leaveBox() {
   if (unsubItems) unsubItems();
   unsubItems = null;
+  if (waitUnsub) { waitUnsub(); waitUnsub = null; }
+  if (isWaiting) stopWaiting();
+  if (inCall) endCall();
+  hideIncomingCallBanner();
   cleanupWebRTC();
   stopExpirySweeper();
   currentBox = null;
@@ -2000,8 +2055,11 @@ function updatePeerStatus() {
   const callBar = document.getElementById('call-bar');
   el.className = 'connection-status ' + (peerConnected ? 'peer-connected' : 'peer-disconnected');
   text.textContent = peerConnected ? 'Peer connected — unlimited direct transfer' : 'No peer — cloud storage only (700 KB limit)';
-  callBar.classList.toggle('active', peerConnected);
+  // Show call bar when peer connected OR when waiting (so end/cancel button is visible)
+  callBar.classList.toggle('active', peerConnected || isWaiting);
   if (!peerConnected && inCall) endCall();
+  // Peer just connected while we were waiting — promote to a real call
+  if (peerConnected && isWaiting) promoteWaitingToCall();
 }
 
 function cleanupWebRTC() {
@@ -2019,6 +2077,12 @@ function cleanupWebRTC() {
 
 // ===================== VOICE / VIDEO CALL =====================
 let inCall = false;
+let isWaiting = false;        // caller is waiting for peer to join
+let waitCallWithVideo = false; // video or voice wait
+let waitTimerInterval = null;
+let waitSeconds = 0;
+let incomingCallWithVideo = false; // for the accept path
+let waitUnsub = null;          // Firestore listener for waiting doc
 let localStream = null;
 let callTimerInterval = null;
 let callSeconds = 0;
@@ -2026,29 +2090,29 @@ let isMuted = false;
 let isCamOff = false;
 
 async function startCall(withVideo) {
-  if (!peerConnected || !peerConnection) { toast('No peer connected', true); return; }
-  if (inCall) return; // already in a call
+  if (inCall || isWaiting) return;
+
+  // No peer yet — enter waiting state: open camera, show spinner, write to Firestore
+  if (!peerConnected || !peerConnection) {
+    await startWaiting(withVideo);
+    return;
+  }
+
   try {
     const constraints = { audio: true, video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } : false };
     localStream = await navigator.mediaDevices.getUserMedia(constraints);
 
-    // Add tracks to peer connection
-    localStream.getTracks().forEach(track => {
-      peerConnection.addTrack(track, localStream);
-    });
+    localStream.getTracks().forEach(track => { peerConnection.addTrack(track, localStream); });
 
-    // Show local video if video call
     if (withVideo) {
       document.getElementById('local-video').srcObject = localStream;
       document.getElementById('video-container').classList.add('active');
     }
 
-    // Notify peer to auto-join
     if (dataChannel?.readyState === 'open') {
       dataChannel.send(JSON.stringify({ type: 'call-start', withVideo }));
     }
 
-    // Renegotiate — create a new offer with our media tracks
     await doRenegotiation();
 
     inCall = true;
@@ -2059,11 +2123,139 @@ async function startCall(withVideo) {
     toast(withVideo ? 'Video call started' : 'Voice call started');
   } catch (e) {
     console.error('Call error:', e);
-    if (e.name === 'NotAllowedError') {
-      toast('Microphone/camera permission denied', true);
-    } else {
-      toast('Could not start call: ' + e.message, true);
+    if (e.name === 'NotAllowedError') toast('Microphone/camera permission denied', true);
+    else toast('Could not start call: ' + e.message, true);
+  }
+}
+
+async function startWaiting(withVideo) {
+  try {
+    const constraints = { audio: true, video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } : false };
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch(e) {
+    if (e.name === 'NotAllowedError') toast('Camera/microphone permission denied', true);
+    else toast('Could not access camera: ' + e.message, true);
+    return;
+  }
+
+  isWaiting = true;
+  waitCallWithVideo = withVideo;
+  waitSeconds = 0;
+
+  // Show local feed
+  if (withVideo) {
+    document.getElementById('local-video').srcObject = localStream;
+  }
+  document.getElementById('video-container').classList.add('active');
+  document.getElementById('call-waiting-overlay').style.display = 'flex';
+
+  // Write waiting notice to Firestore so other users see incoming call
+  if (currentBox) {
+    await sigDoc('waiting').set({
+      withVideo, session: mySessionId,
+      ts: Date.now(), boxCode: currentBox.code
+    }).catch(() => {});
+  }
+
+  updateCallUI();
+  // Start wait timer
+  waitTimerInterval = setInterval(() => {
+    waitSeconds++;
+    const m = String(Math.floor(waitSeconds / 60)).padStart(2,'0');
+    const s = String(waitSeconds % 60).padStart(2,'0');
+    document.getElementById('call-wait-timer').textContent = m + ':' + s;
+  }, 1000);
+
+  toast(withVideo ? '📹 Waiting for peer to join video call…' : '📞 Waiting for peer to join call…');
+}
+
+function stopWaiting() {
+  if (!isWaiting) return;
+  isWaiting = false;
+  clearInterval(waitTimerInterval); waitTimerInterval = null; waitSeconds = 0;
+  document.getElementById('call-waiting-overlay').style.display = 'none';
+  document.getElementById('call-wait-timer').textContent = '00:00';
+  // Clean up Firestore waiting doc
+  if (currentBox) sigDoc('waiting').delete().catch(() => {});
+  updateCallUI();
+}
+
+// Called when a peer connects while we're waiting — transition to a real call
+async function promoteWaitingToCall() {
+  if (!isWaiting) return;
+  stopWaiting();
+  // Small delay to let the peer's data channel open
+  setTimeout(() => {
+    if (peerConnected && !inCall) startCall(waitCallWithVideo);
+  }, 600);
+}
+
+// Listen for a waiting call doc on this box — called from enterMailbox
+function listenForWaitingCall(code) {
+  if (waitUnsub) { waitUnsub(); waitUnsub = null; }
+  waitUnsub = sigDoc('waiting').onSnapshot(snap => {
+    if (!snap.exists) {
+      hideIncomingCallBanner();
+      // If we were waiting and the doc was deleted, peer accepted — promote to call
+      // (handled via promoteWaitingToCall on peerConnected, no action needed here)
+      return;
     }
+    const d = snap.data();
+    // Ignore our own waiting doc
+    if (d.session === mySessionId) {
+      // But watch for decline signal
+      if (d.declined) {
+        stopWaiting();
+        toast('Call declined by peer');
+        sigDoc('waiting').delete().catch(() => {});
+      }
+      return;
+    }
+    // Don't show incoming banner if already in a call
+    if (inCall) return;
+    incomingCallWithVideo = !!d.withVideo;
+    showIncomingCallBanner(incomingCallWithVideo);
+  });
+}
+
+function showIncomingCallBanner(withVideo) {
+  const banner = document.getElementById('incoming-call-banner');
+  document.getElementById('incoming-call-icon').textContent = withVideo ? '📹' : '📞';
+  document.getElementById('incoming-call-sub').textContent = withVideo ? 'Peer is waiting for a video call' : 'Peer is waiting for a voice call';
+  banner.classList.add('active');
+  banner.style.display = 'block';
+}
+
+function hideIncomingCallBanner() {
+  const banner = document.getElementById('incoming-call-banner');
+  banner.classList.remove('active');
+  banner.style.display = 'none';
+}
+
+async function acceptCall() {
+  hideIncomingCallBanner();
+  // Clear the waiting doc so the caller knows someone joined
+  if (currentBox) await sigDoc('waiting').delete().catch(() => {});
+  // Join the call
+  if (peerConnected) {
+    waitForStableAndJoin(incomingCallWithVideo);
+  } else {
+    // Pre-open our camera; call will start when peer connects
+    toast('Connecting… call will start when peer is ready');
+    const constraints = { audio: true, video: incomingCallWithVideo ? { width:{ideal:640},height:{ideal:480},facingMode:'user' } : false };
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (incomingCallWithVideo) document.getElementById('local-video').srcObject = localStream;
+      document.getElementById('video-container').classList.add('active');
+    } catch(e) { toast('Camera access denied', true); }
+  }
+}
+
+function declineCall() {
+  hideIncomingCallBanner();
+  // Write a decline signal so the caller can see it
+  if (currentBox) {
+    sigDoc('waiting').update({ declined: true }).catch(() => {});
   }
 }
 
@@ -2159,6 +2351,9 @@ async function doRenegotiation() {
 }
 
 function endCall() {
+  // Also cancel waiting state if active
+  if (isWaiting) stopWaiting();
+
   // Stop all local tracks
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
@@ -2371,13 +2566,17 @@ function showSelf(){
 
 function updateCallUI() {
   const bar = document.getElementById('call-bar');
+  const activeOrWaiting = inCall || isWaiting;
   bar.classList.toggle('in-call', inCall);
-  document.getElementById('btn-call-start').style.display = inCall ? 'none' : 'flex';
-  document.getElementById('btn-video-start').style.display = inCall ? 'none' : 'flex';
-  document.getElementById('call-status').style.display = inCall ? 'none' : 'block';
+  bar.classList.toggle('is-waiting', isWaiting && !inCall);
+  document.getElementById('btn-call-start').style.display = activeOrWaiting ? 'none' : 'flex';
+  document.getElementById('btn-video-start').style.display = activeOrWaiting ? 'none' : 'flex';
+  document.getElementById('call-status').style.display = activeOrWaiting ? 'none' : 'block';
   document.getElementById('call-timer').style.display = inCall ? 'inline' : 'none';
   document.getElementById('btn-mute').style.display = inCall ? 'flex' : 'none';
-  document.getElementById('btn-call-end').style.display = inCall ? 'flex' : 'none';
+  // Show end/cancel button during both call and wait
+  document.getElementById('btn-call-end').style.display = activeOrWaiting ? 'flex' : 'none';
+  document.getElementById('btn-call-end').title = isWaiting ? 'Cancel call' : 'End call';
   // Show camera toggle only if video tracks exist
   const hasVideo = localStream?.getVideoTracks().length > 0;
   document.getElementById('btn-cam-toggle').style.display = inCall && hasVideo ? 'flex' : 'none';
