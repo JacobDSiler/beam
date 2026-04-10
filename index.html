@@ -1000,7 +1000,8 @@ function enterMailbox(code) {
   initWebRTC(code);
   updateStorageMeter();
   startExpirySweeper(code);
-  listenForWaitingCall(code);
+  // Clean up any stale waiting doc left from a previous session before listening
+  cleanStaleWaitingDoc().then(() => listenForWaitingCall(code));
   updateCallUI();
   const saved = localStorage.getItem('beam_sub_' + code);
   const subBtn = document.getElementById('btn-subscribe');
@@ -2223,17 +2224,35 @@ async function promoteWaitingToCall() {
   }, 600);
 }
 
+// Delete any waiting doc older than 90 seconds — stale from a crashed/refreshed session
+async function cleanStaleWaitingDoc() {
+  try {
+    const snap = await sigDoc('waiting').get();
+    if (!snap.exists) return;
+    const d = snap.data();
+    const ageMs = Date.now() - (d.ts || 0);
+    if (ageMs > 90000) await sigDoc('waiting').delete().catch(() => {});
+  } catch(e) { /* non-critical */ }
+}
+
 // Listen for a waiting call doc on this box — called from enterMailbox
 function listenForWaitingCall(code) {
   if (waitUnsub) { waitUnsub(); waitUnsub = null; }
   waitUnsub = sigDoc('waiting').onSnapshot(snap => {
     if (!snap.exists) {
       hideIncomingCallBanner();
-      // If we were waiting and the doc was deleted, peer accepted — promote to call
-      // (handled via promoteWaitingToCall on peerConnected, no action needed here)
       return;
     }
     const d = snap.data();
+
+    // Ignore docs older than 90 seconds — stale from a crashed or refreshed session
+    const ageMs = Date.now() - (d.ts || 0);
+    if (ageMs > 90000) {
+      sigDoc('waiting').delete().catch(() => {});
+      hideIncomingCallBanner();
+      return;
+    }
+
     // Ignore our own waiting doc
     if (d.session === mySessionId) {
       // But watch for decline signal
