@@ -154,6 +154,26 @@ input::placeholder{color:var(--text3)}
 }
 .item-react-btn:hover{background:var(--surface3);color:var(--text);border-color:var(--beam)}
 .item-card:hover .item-react-btn{display:flex}
+/* Reply button sits next to the reaction button */
+.item-reply-btn{
+  position:absolute;bottom:-11px;left:72px;
+  width:22px;height:22px;border-radius:50%;
+  background:var(--surface2);border:1px solid var(--surface3);
+  font-size:11px;line-height:1;cursor:pointer;
+  display:none;align-items:center;justify-content:center;
+  color:var(--text3);transition:all .15s;z-index:5;padding:0;
+}
+.item-reply-btn:hover{background:var(--surface3);color:var(--text);border-color:var(--accent)}
+.item-card:hover .item-reply-btn{display:flex}
+/* Reply quote inside an item */
+.reply-quote{
+  display:flex;align-items:stretch;gap:8px;margin-bottom:6px;
+  cursor:pointer;opacity:.85;transition:opacity .15s;
+}
+.reply-quote:hover{opacity:1}
+.reply-quote-bar{width:3px;border-radius:2px;background:var(--beam);flex-shrink:0}
+.reply-quote-content{font-size:11px;color:var(--text2);line-height:1.4;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0}
 .emoji-picker{
   position:absolute;bottom:22px;left:44px;
   background:var(--surface2);border:1px solid var(--surface3);border-radius:12px;
@@ -534,6 +554,15 @@ input::placeholder{color:var(--text3)}
         <span id="progress-pct">0%</span>
       </div>
       <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-fill"></div></div>
+    </div>
+
+    <!-- Reply bar — shown when replying to an item -->
+    <div id="reply-bar" style="display:none;background:var(--surface2);border:1px solid var(--surface3);border-left:3px solid var(--beam);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:-4px;display:none;align-items:center;gap:8px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;color:var(--beam);font-weight:600;margin-bottom:2px">↩ Replying to</div>
+        <div id="reply-bar-preview" style="font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      </div>
+      <button onclick="clearReply()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:2px 4px;flex-shrink:0" title="Cancel reply">✕</button>
     </div>
 
     <div class="msg-input-row">
@@ -977,8 +1006,18 @@ function renderItem(item) {
 
   const lockBadge = isLocked ? `<div class="item-locked-badge">&#x1f512; Protected</div>` : '';
   const rtcBadge = isRTCOnly ? `<div class="item-locked-badge" style="color:var(--beam);background:var(--beam-dim)">⚡ Direct</div>` : '';
-  // Reaction button + existing reaction pills — appended after innerHTML is set
+  // Reaction + reply buttons — appended after innerHTML is set
   const reactBtn = `<button class="item-react-btn" onclick="toggleReactionPicker('${item.id}')" title="Add reaction">＋</button>`;
+  const replyBtn = `<button class="item-reply-btn" onclick="setReply('${item.id}')" title="Reply">↩</button>`;
+
+  // Reply quote block — shown if this item is a reply to another
+  let replyQuote = '';
+  if (item.replyToId && item.replyToPreview) {
+    replyQuote = `<div class="reply-quote" onclick="scrollToItem('${item.replyToId}')" title="Jump to original">
+      <div class="reply-quote-bar"></div>
+      <div class="reply-quote-content">${escapeHtml(item.replyToPreview)}</div>
+    </div>`;
+  }
 
   // Expiry badge
   let expiryBadge = '';
@@ -1050,13 +1089,15 @@ function renderItem(item) {
       </div>`;
   }
 
-  // Inject reactions row into item-info, and the floating react button
-  const rHtml = reactionsHtml(item);
-  if (rHtml) {
-    const info = div.querySelector('.item-info');
-    if (info) info.insertAdjacentHTML('beforeend', rHtml);
+  // Inject reactions row and reply quote into item-info, plus floating buttons
+  const info = div.querySelector('.item-info');
+  if (info) {
+    if (replyQuote) info.insertAdjacentHTML('afterbegin', replyQuote);
+    const rHtml = reactionsHtml(item);
+    if (rHtml) info.insertAdjacentHTML('beforeend', rHtml);
   }
   div.insertAdjacentHTML('beforeend', reactBtn);
+  div.insertAdjacentHTML('beforeend', replyBtn);
 
   return div;
 }
@@ -1524,7 +1565,7 @@ async function sendMessage() {
   // Files-only path — no text or media recording, just dispatch staged files
   if (!text && !hasMedia && hasFiles) {
     input.value = '';
-    clearItemPasscode(); clearItemExpiry();
+    clearItemPasscode(); clearItemExpiry(); clearReply();
     await sendStagedFiles(itemPassHash);
     clearStagedFiles();
     return;
@@ -1546,6 +1587,7 @@ async function sendMessage() {
     };
     if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
     if (text) itemData.text = text;
+    if (replyToState) { itemData.replyToId = replyToState.id; itemData.replyToPreview = replyToState.preview; }
 
     // Determine type
     if (mediaBlob && text) {
@@ -1571,7 +1613,7 @@ async function sendMessage() {
           await sendFileViaRTC(file, itemPassHash);
           toast('Sent — media via direct transfer');
           notifySubscribers('message + ' + mediaType, itemPassHash ? '(protected content)' : (text?.substring(0, 30) || mediaType + ' message'));
-          clearItemPasscode(); clearItemExpiry();
+          clearItemPasscode(); clearItemExpiry(); clearReply();
           await sendStagedFiles(itemPassHash);
           clearStagedFiles();
           return;
@@ -1584,7 +1626,7 @@ async function sendMessage() {
             await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
             toast('Text sent (media skipped — too large)');
           }
-          clearItemPasscode(); clearItemExpiry();
+          clearItemPasscode(); clearItemExpiry(); clearReply();
           await sendStagedFiles(itemPassHash);
           clearStagedFiles();
           return;
@@ -1616,7 +1658,7 @@ async function sendMessage() {
     }
     toast(hasMedia ? (text ? 'Message + ' + mediaType + ' sent' : mediaType.charAt(0).toUpperCase() + mediaType.slice(1) + ' message sent') : 'Message sent');
     notifySubscribers(itemData.type, itemPassHash ? '(protected content)' : (text || mediaType + ' message').substring(0, 50));
-    clearItemPasscode(); clearItemExpiry();
+    clearItemPasscode(); clearItemExpiry(); clearReply();
     // Send staged files under the same passcode as the message
     await sendStagedFiles(itemPassHash);
     clearStagedFiles();
@@ -2540,11 +2582,12 @@ async function saveRecordedMessage(blob, type) {
         expiresAt: itemExpiresAt()
       };
       if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
+      if (replyToState) { itemData.replyToId = replyToState.id; itemData.replyToPreview = replyToState.preview; }
       await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
       await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
       toast(type === 'video' ? 'Video message sent' : 'Voice message sent');
       notifySubscribers(type + ' message', itemPassHash ? '(protected content)' : fileName);
-      clearItemPasscode(); clearItemExpiry();
+      clearItemPasscode(); clearItemExpiry(); clearReply();
     } catch (e) { toast('Failed to send ' + type + ' message', true); }
   };
   reader.readAsDataURL(blob);
@@ -2839,6 +2882,55 @@ async function toggleReaction(itemId, emoji) {
   } else {
     await addReaction(itemId, emoji);
   }
+}
+
+// ===================== REPLY =====================
+let replyToState = null; // { id, preview }
+
+function setReply(itemId) {
+  // Get a preview string from the item card
+  const card = document.querySelector(`[data-item-id="${itemId}"]`);
+  let preview = '';
+  if (card) {
+    const msg = card.querySelector('.item-msg');
+    const name = card.querySelector('.item-name');
+    const icon = card.querySelector('.item-icon');
+    if (msg && msg.textContent.trim()) {
+      preview = msg.textContent.trim();
+    } else if (name && name.textContent.trim()) {
+      preview = (icon ? icon.textContent.trim() + ' ' : '') + name.textContent.trim();
+    } else {
+      // voice / video message
+      const metaEl = card.querySelector('.item-meta');
+      preview = (icon ? icon.textContent.trim() + ' ' : '') + (metaEl ? metaEl.textContent.trim() : 'item');
+    }
+    preview = preview.slice(0, 80);
+  }
+
+  replyToState = { id: itemId, preview };
+
+  // Show reply bar
+  const bar = document.getElementById('reply-bar');
+  bar.style.display = 'flex';
+  document.getElementById('reply-bar-preview').textContent = preview;
+  document.getElementById('msg-input').focus();
+}
+
+function clearReply() {
+  replyToState = null;
+  const bar = document.getElementById('reply-bar');
+  bar.style.display = 'none';
+  document.getElementById('reply-bar-preview').textContent = '';
+}
+
+function scrollToItem(itemId) {
+  const card = document.querySelector(`[data-item-id="${itemId}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Briefly highlight it
+  card.style.transition = 'border-color .2s';
+  card.style.borderColor = 'var(--beam)';
+  setTimeout(() => { card.style.borderColor = ''; }, 1200);
 }
 
 // ===================== HELPERS =====================
