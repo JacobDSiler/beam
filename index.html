@@ -2207,8 +2207,20 @@ function updatePeerStatus() {
   text.textContent = peerConnected ? 'Peer connected — unlimited direct transfer' : 'No peer — cloud storage only (700 KB limit)';
   callBar.classList.toggle('is-waiting', isWaiting && !inCall);
   if (!peerConnected && inCall) endCall();
-  // Peer just connected while we were waiting — promote to a real call
-  if (peerConnected && isWaiting) promoteWaitingToCall();
+
+  if (peerConnected) {
+    // If we accepted a call before peer connected, complete the join now
+    if (pendingJoin && !inCall) {
+      const pj = pendingJoin;
+      pendingJoin = null;
+      waitForStableAndJoin(pj.withVideo);
+      return;
+    }
+    // If we were waiting (caller side), promote to real call
+    if (isWaiting) {
+      promoteWaitingToCall();
+    }
+  }
 }
 
 function cleanupWebRTC() {
@@ -2231,6 +2243,7 @@ let waitCallWithVideo = false; // video or voice wait
 let waitTimerInterval = null;
 let waitSeconds = 0;
 let incomingCallWithVideo = false; // for the accept path
+let pendingJoin = null;        // { withVideo } — set when user accepts before peer is connected
 let waitUnsub = null;          // Firestore listener for waiting doc
 let localStream = null;
 let callTimerInterval = null;
@@ -2317,6 +2330,8 @@ async function startWaiting(withVideo) {
 
   toast(withVideo ? '📹 Waiting for peer to join video call…' : '📞 Waiting for peer to join call…');
   startOutgoingRing();
+  // Notify subscribers so they get an email even if they're not in the box
+  notifySubscribers('call', withVideo ? 'video' : 'voice');
 }
 
 function stopWaiting() {
@@ -2368,9 +2383,8 @@ function listenForWaitingCall(code) {
       return;
     }
 
-    // Ignore our own waiting doc
+    // Ignore our own waiting doc — but watch for decline signal
     if (d.session === mySessionId) {
-      // But watch for decline signal
       if (d.declined) {
         stopWaiting();
         toast('Call declined by peer');
@@ -2378,8 +2392,25 @@ function listenForWaitingCall(code) {
       }
       return;
     }
+
     // Don't show incoming banner if already in a call
     if (inCall) return;
+
+    // MUTUAL WAITING: both users pressed call simultaneously.
+    // Break the tie: the user with the lower session ID becomes the accepter,
+    // the other stays as caller. This ensures exactly one call starts.
+    if (isWaiting) {
+      if (mySessionId < d.session) {
+        // We auto-accept — stop our own waiting and join their call
+        console.log('Mutual wait: auto-accepting as lower session ID');
+        stopWaiting();
+        incomingCallWithVideo = !!d.withVideo;
+        acceptCall();
+      }
+      // else: we keep waiting, the other side will auto-accept
+      return;
+    }
+
     incomingCallWithVideo = !!d.withVideo;
     showIncomingCallBanner(incomingCallWithVideo);
   });
@@ -2408,13 +2439,13 @@ async function acceptCall() {
   if (currentBox) await sigDoc('waiting').delete().catch(() => {});
 
   if (peerConnected && peerConnection) {
-    // Peer is connected — join immediately with our own media
+    // Peer already connected — join immediately
     waitForStableAndJoin(incomingCallWithVideo);
   } else {
-    // Peer not yet connected via WebRTC — open camera and wait
-    // When peer connects, the call-start data channel message will have already
-    // shown this banner; once connected, they'll renegotiate and we join then
-    toast('Opening camera — call will connect shortly');
+    // Peer not connected yet — store the intent and open camera now
+    // joinCall will be triggered automatically when peerConnected becomes true
+    pendingJoin = { withVideo: incomingCallWithVideo };
+    toast('Accepted — opening camera, connecting…');
     const constraints = {
       audio: true,
       video: incomingCallWithVideo ? { width:{ideal:640}, height:{ideal:480}, facingMode:'user' } : false
@@ -2425,6 +2456,7 @@ async function acceptCall() {
       document.getElementById('video-container').classList.add('active');
       updateCallUI();
     } catch(e) {
+      pendingJoin = null;
       if (e.name === 'NotAllowedError') toast('Camera/microphone permission denied', true);
       else toast('Could not access camera: ' + e.message, true);
     }
@@ -2532,8 +2564,9 @@ async function doRenegotiation() {
 }
 
 function endCall() {
-  // Also cancel waiting state if active
+  // Also cancel waiting state and pending join if active
   if (isWaiting) stopWaiting();
+  pendingJoin = null;
 
   // Stop all local tracks
   if (localStream) {
