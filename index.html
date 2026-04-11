@@ -2187,10 +2187,10 @@ function setupDataChannel() {
         case 'file-notify': toast('Peer sent: ' + msg.fileName); break;
         case 'call-start':
           if (!inCall) {
-            console.log('Received call-start, withVideo:', msg.withVideo, 'peerConnection state:', peerConnection?.signalingState);
-            toast(msg.withVideo ? 'Incoming video call — joining...' : 'Incoming voice call — joining...');
-            // Wait for signaling to stabilize before adding our own tracks
-            waitForStableAndJoin(msg.withVideo);
+            console.log('Received call-start via data channel, withVideo:', msg.withVideo);
+            // Show the incoming call banner — peer must Accept manually, not auto-join
+            incomingCallWithVideo = !!msg.withVideo;
+            showIncomingCallBanner(incomingCallWithVideo);
           }
           break;
         case 'call-end': if (inCall) { endCall(); toast('Peer ended the call'); } break;
@@ -2333,11 +2333,10 @@ function stopWaiting() {
 // Called when a peer connects while we're waiting — transition to a real call
 async function promoteWaitingToCall() {
   if (!isWaiting) return;
+  // Peer just connected — start the actual call on our side (we are the caller)
+  // The peer will see the incoming call banner via Firestore and must Accept manually
   stopWaiting();
-  // Small delay to let the peer's data channel open
-  setTimeout(() => {
-    if (peerConnected && !inCall) startCall(waitCallWithVideo);
-  }, 600);
+  await startCall(waitCallWithVideo);
 }
 
 // Delete any waiting doc older than 90 seconds — stale from a crashed/refreshed session
@@ -2404,29 +2403,41 @@ function hideIncomingCallBanner() {
 
 async function acceptCall() {
   hideIncomingCallBanner();
-  // Clear the waiting doc so the caller knows someone joined
+  stopAllRings();
+  // Delete the waiting doc so the caller knows it was accepted
   if (currentBox) await sigDoc('waiting').delete().catch(() => {});
-  // Join the call
-  if (peerConnected) {
+
+  if (peerConnected && peerConnection) {
+    // Peer is connected — join immediately with our own media
     waitForStableAndJoin(incomingCallWithVideo);
   } else {
-    // Pre-open our camera; call will start when peer connects
-    toast('Connecting… call will start when peer is ready');
-    const constraints = { audio: true, video: incomingCallWithVideo ? { width:{ideal:640},height:{ideal:480},facingMode:'user' } : false };
+    // Peer not yet connected via WebRTC — open camera and wait
+    // When peer connects, the call-start data channel message will have already
+    // shown this banner; once connected, they'll renegotiate and we join then
+    toast('Opening camera — call will connect shortly');
+    const constraints = {
+      audio: true,
+      video: incomingCallWithVideo ? { width:{ideal:640}, height:{ideal:480}, facingMode:'user' } : false
+    };
     try {
       localStream = await navigator.mediaDevices.getUserMedia(constraints);
       if (incomingCallWithVideo) document.getElementById('local-video').srcObject = localStream;
       document.getElementById('video-container').classList.add('active');
-    } catch(e) { toast('Camera access denied', true); }
+      updateCallUI();
+    } catch(e) {
+      if (e.name === 'NotAllowedError') toast('Camera/microphone permission denied', true);
+      else toast('Could not access camera: ' + e.message, true);
+    }
   }
 }
 
 function declineCall() {
   hideIncomingCallBanner();
-  // Write a decline signal so the caller can see it
+  stopAllRings();
   if (currentBox) {
     sigDoc('waiting').update({ declined: true }).catch(() => {});
   }
+  toast('Call declined');
 }
 
 // Join an incoming call — add our own media without notifying (they already know)
@@ -3185,52 +3196,66 @@ function stopExpirySweeper() {
 let audioCtx = null;
 let ringInterval = null;
 
-function getAudioCtx() {
+// Pre-warm the AudioContext on first user interaction — browsers block audio
+// until a gesture has occurred. We create it early so it's ready when needed.
+function prewarmAudio() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Immediately suspend — just want it initialised
+    audioCtx.suspend();
+  } catch(e) {}
+  document.removeEventListener('click', prewarmAudio);
+  document.removeEventListener('keydown', prewarmAudio);
+}
+document.addEventListener('click', prewarmAudio);
+document.addEventListener('keydown', prewarmAudio);
+
+async function getAudioCtx() {
   if (!audioCtx || audioCtx.state === 'closed') {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
   return audioCtx;
 }
 
 // Play a single gentle chime — two sine tones fading in then out
-// freq1/freq2: the two pitches; duration: seconds for the whole chime
-function playChime(freq1, freq2, duration, volume = 0.18) {
-  const ctx = getAudioCtx();
-  const now = ctx.currentTime;
-  const attack = 0.06, release = duration * 0.6;
+async function playChime(freq1, freq2, duration, volume = 0.25) {
+  try {
+    const ctx = await getAudioCtx();
+    const now = ctx.currentTime;
+    const attack = 0.08;
 
-  [[freq1, 0], [freq2, duration * 0.15]].forEach(([freq, delay]) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq, now + delay);
-    gain.gain.setValueAtTime(0, now + delay);
-    gain.gain.linearRampToValueAtTime(volume, now + delay + attack);
-    gain.gain.setValueAtTime(volume, now + delay + attack);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
-    osc.start(now + delay);
-    osc.stop(now + delay + duration + 0.05);
-  });
+    [[freq1, 0], [freq2, duration * 0.2]].forEach(([freq, delay]) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + delay);
+      gain.gain.setValueAtTime(0, now + delay);
+      gain.gain.linearRampToValueAtTime(volume, now + delay + attack);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
+      osc.start(now + delay);
+      osc.stop(now + delay + duration + 0.1);
+    });
+  } catch(e) { console.log('Audio error:', e); }
 }
 
-// Incoming call: bright gentle two-note chime (C5 → E5), repeats every 3s
+// Incoming ring: bright two-note chime C5 → E5, repeats every 3s
 function startIncomingRing() {
   stopAllRings();
-  const ring = () => playChime(523.25, 659.25, 1.6, 0.16); // C5, E5
+  const ring = () => playChime(523.25, 659.25, 1.8, 0.25);
   ring();
   ringInterval = setInterval(ring, 3000);
 }
 
-// Outgoing/waiting ring: slow calm single pulse (A3 → D4), repeats every 4s
-// Lower, warmer, not urgent — a patient waiting tone
+// Outgoing/waiting ring: calm lower pulse A3 → D4, repeats every 4s
 function startOutgoingRing() {
   stopAllRings();
-  const ring = () => {
-    playChime(220, 293.66, 2.2, 0.12); // A3, D4 — soft, low, warm
-  };
+  const ring = () => playChime(220, 293.66, 2.4, 0.18);
   ring();
   ringInterval = setInterval(ring, 4000);
 }
