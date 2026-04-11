@@ -135,6 +135,11 @@ input::placeholder{color:var(--text3)}
 .msg-input-row{display:flex;gap:8px}
 .msg-input-row input{flex:1;font-family:var(--font-sans);font-size:14px}
 .msg-input-row button{padding:12px 20px}
+.emoji-insert-btn{
+  font-size:22px;background:none;border:none;cursor:pointer;
+  border-radius:6px;padding:3px 5px;transition:background .1s,transform .1s;line-height:1;
+}
+.emoji-insert-btn:hover{background:var(--surface3);transform:scale(1.2)}
 
 .items-section h4{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:600}
 .item-list{display:flex;flex-direction:column;gap:8px}
@@ -645,8 +650,53 @@ input::placeholder{color:var(--text3)}
       <button onclick="clearReply()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:2px 4px;flex-shrink:0" title="Cancel reply">✕</button>
     </div>
 
+    <!-- Emoji picker panel -->
+    <div id="emoji-panel" style="display:none;flex-wrap:wrap;gap:4px;padding:8px 10px;background:var(--surface2);border:1px solid var(--surface3);border-radius:var(--radius-sm);margin-bottom:-4px">
+      <button class="emoji-insert-btn" onclick="insertEmoji('😊')">😊</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😄')">😄</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😂')">😂</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🤣')">🤣</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😍')">😍</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🥰')">🥰</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😘')">😘</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😎')">😎</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🤔')">🤔</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😅')">😅</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😬')">😬</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😢')">😢</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😭')">😭</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😮')">😮</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('😴')">😴</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🥺')">🥺</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🤗')">🤗</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🙏')">🙏</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('👍')">👍</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('👎')">👎</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('👏')">👏</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🙌')">🙌</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('❤️')">❤️</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('💙')">💙</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('💚')">💚</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('💛')">💛</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🔥')">🔥</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('✨')">✨</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🎉')">🎉</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🎊')">🎊</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🌟')">🌟</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('☀️')">☀️</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🌈')">🌈</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🌸')">🌸</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🍀')">🍀</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🎵')">🎵</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('☕')">☕</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🍕')">🍕</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🐶')">🐶</button>
+      <button class="emoji-insert-btn" onclick="insertEmoji('🐱')">🐱</button>
+    </div>
+
     <div class="msg-input-row">
       <input type="text" id="msg-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendMessage()">
+      <button class="btn-icon" id="emoji-toggle-btn" title="Emoji" onclick="toggleEmojiPanel()" style="flex-shrink:0">😊</button>
       <button class="btn-icon voice-record-btn" id="voice-record-btn" title="Record voice message" onclick="toggleVoiceRecord()">&#x1f3a4;</button>
       <button class="btn-icon" id="video-record-btn" title="Record video message" onclick="toggleVideoRecord()">&#x1f4f9;</button>
       <button class="btn-icon" id="item-lock-btn" title="Add passcode to next send" onclick="toggleItemLock()" style="flex-shrink:0">&#x1f513;</button>
@@ -2201,6 +2251,7 @@ async function startWaiting(withVideo) {
   }, 1000);
 
   toast(withVideo ? '📹 Waiting for peer to join video call…' : '📞 Waiting for peer to join call…');
+  startOutgoingRing();
 }
 
 function stopWaiting() {
@@ -2209,7 +2260,7 @@ function stopWaiting() {
   clearInterval(waitTimerInterval); waitTimerInterval = null; waitSeconds = 0;
   document.getElementById('call-waiting-overlay').style.display = 'none';
   document.getElementById('call-wait-timer').textContent = '00:00';
-  // Clean up Firestore waiting doc
+  stopAllRings();
   if (currentBox) sigDoc('waiting').delete().catch(() => {});
   updateCallUI();
 }
@@ -2276,12 +2327,14 @@ function showIncomingCallBanner(withVideo) {
   document.getElementById('incoming-call-sub').textContent = withVideo ? 'Peer is waiting for a video call' : 'Peer is waiting for a voice call';
   banner.classList.add('active');
   banner.style.display = 'block';
+  startIncomingRing();
 }
 
 function hideIncomingCallBanner() {
   const banner = document.getElementById('incoming-call-banner');
   banner.classList.remove('active');
   banner.style.display = 'none';
+  stopAllRings();
 }
 
 async function acceptCall() {
@@ -3061,6 +3114,99 @@ function startExpirySweeper(code) {
 
 function stopExpirySweeper() {
   if (expirySweeperInterval) { clearInterval(expirySweeperInterval); expirySweeperInterval = null; }
+}
+
+// ===================== RINGTONES (Web Audio API — no files needed) =====================
+let audioCtx = null;
+let ringInterval = null;
+
+function getAudioCtx() {
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+// Play a single gentle chime — two sine tones fading in then out
+// freq1/freq2: the two pitches; duration: seconds for the whole chime
+function playChime(freq1, freq2, duration, volume = 0.18) {
+  const ctx = getAudioCtx();
+  const now = ctx.currentTime;
+  const attack = 0.06, release = duration * 0.6;
+
+  [[freq1, 0], [freq2, duration * 0.15]].forEach(([freq, delay]) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now + delay);
+    gain.gain.setValueAtTime(0, now + delay);
+    gain.gain.linearRampToValueAtTime(volume, now + delay + attack);
+    gain.gain.setValueAtTime(volume, now + delay + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
+    osc.start(now + delay);
+    osc.stop(now + delay + duration + 0.05);
+  });
+}
+
+// Incoming call: bright gentle two-note chime (C5 → E5), repeats every 3s
+function startIncomingRing() {
+  stopAllRings();
+  const ring = () => playChime(523.25, 659.25, 1.6, 0.16); // C5, E5
+  ring();
+  ringInterval = setInterval(ring, 3000);
+}
+
+// Outgoing/waiting ring: slow calm single pulse (A3 → D4), repeats every 4s
+// Lower, warmer, not urgent — a patient waiting tone
+function startOutgoingRing() {
+  stopAllRings();
+  const ring = () => {
+    playChime(220, 293.66, 2.2, 0.12); // A3, D4 — soft, low, warm
+  };
+  ring();
+  ringInterval = setInterval(ring, 4000);
+}
+
+function stopAllRings() {
+  if (ringInterval) { clearInterval(ringInterval); ringInterval = null; }
+}
+
+// ===================== EMOJI PICKER =====================
+let emojiPanelOpen = false;
+
+function toggleEmojiPanel() {
+  emojiPanelOpen = !emojiPanelOpen;
+  const panel = document.getElementById('emoji-panel');
+  const btn = document.getElementById('emoji-toggle-btn');
+  panel.style.display = emojiPanelOpen ? 'flex' : 'none';
+  btn.classList.toggle('item-lock-active', emojiPanelOpen);
+  if (emojiPanelOpen) {
+    // Close on outside click
+    setTimeout(() => {
+      document.addEventListener('click', function handler(e) {
+        if (!e.target.closest('#emoji-panel') && !e.target.closest('#emoji-toggle-btn')) {
+          emojiPanelOpen = false;
+          panel.style.display = 'none';
+          btn.classList.remove('item-lock-active');
+          document.removeEventListener('click', handler);
+        }
+      });
+    }, 10);
+  }
+}
+
+function insertEmoji(emoji) {
+  const input = document.getElementById('msg-input');
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+  // Move cursor after the inserted emoji
+  const pos = start + emoji.length;
+  input.setSelectionRange(pos, pos);
+  input.focus();
 }
 
 // ===================== EDIT MESSAGE =====================
