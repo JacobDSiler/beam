@@ -236,6 +236,30 @@ input::placeholder{color:var(--text3)}
 .item-actions{display:flex;gap:6px}
 
 .empty-state{text-align:center;padding:30px;color:var(--text3);font-size:13px}
+/* Multi-select action buttons */
+.sel-action-btn{
+  padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;
+  background:var(--surface3);color:var(--text2);border:none;cursor:pointer;
+  font-family:var(--font-sans);transition:all .15s;
+}
+.sel-action-btn:hover{background:var(--surface2);color:var(--text)}
+.sel-export{background:var(--beam-dim);color:var(--beam)}
+.sel-export:hover{background:var(--beam);color:#000}
+.sel-delete{color:var(--warn)}
+.sel-delete:hover{background:var(--warn);color:#fff}
+/* Select mode item card */
+.item-card.select-mode{cursor:pointer;padding-left:44px}
+.item-card.select-mode:hover{border-color:var(--beam-dim)}
+.item-card.selected{border-color:var(--beam) !important;background:var(--beam-glow)}
+/* Checkbox overlay */
+.item-select-check{
+  position:absolute;top:50%;left:12px;transform:translateY(-50%);
+  width:18px;height:18px;border-radius:4px;border:2px solid var(--surface3);
+  background:var(--surface2);display:none;align-items:center;justify-content:center;
+  pointer-events:none;flex-shrink:0;transition:all .15s;
+}
+.item-card.select-mode .item-select-check{display:flex}
+.item-card.selected .item-select-check{background:var(--beam);border-color:var(--beam);color:#000;font-size:11px;font-weight:900}
 
 .pw-wrap{position:relative;display:flex;align-items:center}
 .pw-wrap input{width:100%;padding-right:44px}
@@ -752,7 +776,30 @@ input::placeholder{color:var(--text3)}
     </div>
 
     <div class="items-section">
-      <h4>Contents</h4>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <h4 style="margin-bottom:0">Contents</h4>
+        <button class="btn-secondary" id="btn-select-mode" onclick="toggleSelectMode()" style="padding:5px 12px;font-size:12px">Select</button>
+      </div>
+
+      <!-- Multi-select action bar -->
+      <div id="select-action-bar" style="display:none;flex-wrap:wrap;gap:6px;padding:10px 12px;background:var(--surface2);border:1px solid var(--beam-dim);border-radius:var(--radius-sm);margin-bottom:8px;align-items:center">
+        <span id="select-count" style="font-size:12px;color:var(--text2);flex:1">0 selected</span>
+        <button class="sel-action-btn" onclick="selectAll()">Select all</button>
+        <button class="sel-action-btn" onclick="deselectAll()">Deselect all</button>
+        <button class="sel-action-btn sel-export" onclick="showExportPicker()">⬇ Export</button>
+        <button class="sel-action-btn sel-delete" onclick="deleteSelected()">🗑 Delete</button>
+        <button class="sel-action-btn" onclick="toggleSelectMode()">Cancel</button>
+      </div>
+
+      <!-- Export format picker -->
+      <div id="export-picker" style="display:none;flex-wrap:wrap;gap:6px;padding:8px 12px;background:var(--surface2);border:1px solid var(--surface3);border-radius:var(--radius-sm);margin-bottom:8px;align-items:center">
+        <span style="font-size:12px;color:var(--text2);flex:1">Export as:</span>
+        <button class="sel-action-btn" onclick="exportSelected('txt')">📄 .txt</button>
+        <button class="sel-action-btn" onclick="exportSelected('md')">📝 .md</button>
+        <button class="sel-action-btn" onclick="exportSelected('pdf')">📑 PDF</button>
+        <button class="sel-action-btn" onclick="document.getElementById('export-picker').style.display='none'">✕</button>
+      </div>
+
       <div class="item-list" id="item-list">
         <div class="empty-state">This mailbox is empty</div>
       </div>
@@ -1139,6 +1186,20 @@ function renderItem(item) {
   const isRTCOnly = item.sentViaRTC && !item.fileData;
   div.className = 'item-card' + (isLocked && !isUnlocked ? ' locked' : '');
   div.dataset.itemId = item.id;
+  // Store serialisable item data for export (avoid base64 fileData in dataset — too large)
+  div.dataset.itemType = item.type || 'file';
+  div.dataset.itemText = item.text || '';
+  div.dataset.itemFileName = item.fileName || '';
+  div.dataset.itemCreated = item.createdAt?.toDate?.()?.toISOString() || '';
+  div.dataset.itemHasData = item.fileData ? '1' : '0';
+  div.dataset.itemMime = item.mimeType || '';
+  div.dataset.itemSize = item.size || '0';
+  // Click handler for select mode
+  div.addEventListener('click', e => {
+    if (!selectModeActive) return;
+    if (e.target.closest('button') || e.target.closest('a') || e.target.closest('audio') || e.target.closest('video')) return;
+    toggleItemSelected(item.id);
+  });
 
   const lockBadge = isLocked ? `<div class="item-locked-badge">&#x1f512; Protected</div>` : '';
   const rtcBadge = isRTCOnly ? `<div class="item-locked-badge" style="color:var(--beam);background:var(--beam-dim)">⚡ Direct</div>` : '';
@@ -1238,6 +1299,10 @@ function renderItem(item) {
   }
   div.insertAdjacentHTML('beforeend', reactBtn);
   div.insertAdjacentHTML('beforeend', replyBtn);
+  // Checkbox for select mode (always in DOM, shown via CSS when select mode active)
+  div.insertAdjacentHTML('afterbegin', '<div class="item-select-check">✓</div>');
+  if (selectModeActive) div.classList.add('select-mode');
+  if (selectedItems.has(item.id)) div.classList.add('selected');
 
   return div;
 }
@@ -3172,6 +3237,232 @@ function startOutgoingRing() {
 
 function stopAllRings() {
   if (ringInterval) { clearInterval(ringInterval); ringInterval = null; }
+}
+
+// ===================== MULTI-SELECT & EXPORT =====================
+let selectModeActive = false;
+const selectedItems = new Set();
+
+function toggleSelectMode() {
+  selectModeActive = !selectModeActive;
+  selectedItems.clear();
+  const bar = document.getElementById('select-action-bar');
+  const exportPicker = document.getElementById('export-picker');
+  const btn = document.getElementById('btn-select-mode');
+  bar.style.display = selectModeActive ? 'flex' : 'none';
+  exportPicker.style.display = 'none';
+  btn.textContent = selectModeActive ? 'Done' : 'Select';
+  btn.style.borderColor = selectModeActive ? 'var(--beam)' : '';
+  btn.style.color = selectModeActive ? 'var(--beam)' : '';
+  // Apply/remove select-mode class on all cards
+  document.querySelectorAll('.item-card').forEach(card => {
+    card.classList.toggle('select-mode', selectModeActive);
+    card.classList.remove('selected');
+  });
+  updateSelectCount();
+}
+
+function toggleItemSelected(itemId) {
+  if (selectedItems.has(itemId)) selectedItems.delete(itemId);
+  else selectedItems.add(itemId);
+  const card = document.querySelector(`[data-item-id="${itemId}"]`);
+  if (card) card.classList.toggle('selected', selectedItems.has(itemId));
+  updateSelectCount();
+}
+
+function selectAll() {
+  document.querySelectorAll('.item-card[data-item-id]').forEach(card => {
+    selectedItems.add(card.dataset.itemId);
+    card.classList.add('selected');
+  });
+  updateSelectCount();
+}
+
+function deselectAll() {
+  selectedItems.clear();
+  document.querySelectorAll('.item-card').forEach(c => c.classList.remove('selected'));
+  updateSelectCount();
+}
+
+function updateSelectCount() {
+  const n = selectedItems.size;
+  document.getElementById('select-count').textContent = n === 0 ? 'None selected' : `${n} selected`;
+}
+
+async function deleteSelected() {
+  if (!selectedItems.size) { toast('Nothing selected', true); return; }
+  if (!confirm(`Delete ${selectedItems.size} item(s) for everyone?`)) return;
+  const ids = [...selectedItems];
+  let freed = 0;
+  const batch = db.batch();
+  for (const id of ids) {
+    const card = document.querySelector(`[data-item-id="${id}"]`);
+    const size = parseInt(card?.dataset.itemSize || '0');
+    freed += size;
+    batch.delete(db.collection('boxes').doc(currentBox.code).collection('items').doc(id));
+  }
+  try {
+    await batch.commit();
+    if (freed > 0) await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(-freed) });
+    toast(`Deleted ${ids.length} item(s)`);
+    toggleSelectMode();
+  } catch(e) { toast('Delete failed: ' + e.message, true); }
+}
+
+function showExportPicker() {
+  if (!selectedItems.size) { toast('Nothing selected', true); return; }
+  const picker = document.getElementById('export-picker');
+  picker.style.display = picker.style.display === 'flex' ? 'none' : 'flex';
+}
+
+async function exportSelected(format) {
+  document.getElementById('export-picker').style.display = 'none';
+  if (!selectedItems.size) { toast('Nothing selected', true); return; }
+
+  const boxName = currentBox?.code?.toUpperCase() || 'MAILBOX';
+  const now = new Date().toLocaleString();
+  const ids = [...selectedItems];
+  const cards = ids.map(id => document.querySelector(`[data-item-id="${id}"]`)).filter(Boolean);
+
+  // Sort by DOM order (which is chronological)
+  cards.sort((a, b) => {
+    const aDate = a.dataset.itemCreated, bDate = b.dataset.itemCreated;
+    return aDate < bDate ? -1 : aDate > bDate ? 1 : 0;
+  });
+
+  // Build text content
+  let lines = [];
+  if (format === 'md') {
+    lines.push(`# Beam Export — Mailbox ${boxName}`);
+    lines.push(`Exported: ${now}\n`);
+  } else {
+    lines.push(`BEAM EXPORT — Mailbox ${boxName}`);
+    lines.push(`Exported: ${now}`);
+    lines.push('='.repeat(50) + '\n');
+  }
+
+  let fileCount = 0;
+  for (const card of cards) {
+    const type = card.dataset.itemType;
+    const text = card.dataset.itemText;
+    const fileName = card.dataset.itemFileName;
+    const created = card.dataset.itemCreated ? new Date(card.dataset.itemCreated).toLocaleString() : '';
+    const hasData = card.dataset.itemHasData === '1';
+
+    if (format === 'md') {
+      lines.push(`---`);
+      if (type === 'message') {
+        lines.push(`**Message** · ${created}`);
+        lines.push('');
+        lines.push(text || '*(empty)*');
+      } else if (type === 'voice') {
+        lines.push(`**Voice message** · ${created}`);
+        lines.push('*(audio — download to listen)*');
+      } else if (type === 'video-msg') {
+        lines.push(`**Video message** · ${created}`);
+        lines.push('*(video — download to watch)*');
+      } else {
+        lines.push(`**File:** \`${fileName}\` · ${created}`);
+        if (!hasData) lines.push('*(sent via direct transfer — not stored)*');
+      }
+      lines.push('');
+    } else {
+      lines.push(`[${created}]`);
+      if (type === 'message') {
+        lines.push(text || '(empty)');
+      } else if (type === 'voice') {
+        lines.push('[Voice message]');
+      } else if (type === 'video-msg') {
+        lines.push('[Video message]');
+      } else {
+        lines.push(`[File: ${fileName}]`);
+        if (!hasData) lines.push('(sent via direct transfer — not stored in cloud)');
+      }
+      lines.push('');
+    }
+
+    // Download any stored files automatically
+    if ((type === 'file' || type === 'voice' || type === 'video-msg') && hasData && format !== 'pdf') {
+      await downloadItemSilent(card.dataset.itemId, fileName || 'file');
+      fileCount++;
+    }
+  }
+
+  const content = lines.join('\n');
+  const ext = format === 'md' ? 'md' : 'txt';
+  const filename = `beam-${boxName.toLowerCase()}-export.${ext}`;
+
+  if (format === 'pdf') {
+    exportAsPdf(content, boxName, now);
+  } else {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`Exported ${ids.length} item(s)${fileCount ? ` + ${fileCount} file(s)` : ''}`);
+  }
+}
+
+async function downloadItemSilent(itemId, fallbackName) {
+  try {
+    const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
+    const data = d.data();
+    if (!data?.fileData) return;
+    const byteChars = atob(data.fileData);
+    const byteArray = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([byteArray], { type: data.mimeType || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = data.fileName || fallbackName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch(e) { console.log('Silent download failed:', e); }
+}
+
+function exportAsPdf(content, boxName, exportDate) {
+  const win = window.open('', '_blank');
+  if (!win) { toast('Pop-up blocked — allow popups to export PDF', true); return; }
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam Export — ${boxName}</title>
+<style>
+  body{font-family:-apple-system,system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;color:#111;line-height:1.6}
+  h1{font-size:20px;border-bottom:2px solid #00e4ff;padding-bottom:8px;margin-bottom:4px}
+  .meta{font-size:12px;color:#666;margin-bottom:24px}
+  .item{margin-bottom:16px;padding:12px 14px;border-left:3px solid #00e4ff;background:#f9f9f9;border-radius:0 6px 6px 0}
+  .item-time{font-size:11px;color:#888;margin-bottom:4px}
+  .item-body{font-size:14px;white-space:pre-wrap;word-break:break-word}
+  .item-file{font-size:13px;color:#555;font-style:italic}
+  hr{border:none;border-top:1px solid #eee;margin:12px 0}
+  @media print{body{margin:20px}button{display:none}}
+</style></head><body>
+<h1>Beam Export — Mailbox ${boxName}</h1>
+<div class="meta">Exported ${exportDate} · ${selectedItems.size} item(s)</div>`);
+
+  // Re-parse content lines into structured blocks for nicer PDF
+  const cards = [...selectedItems].map(id => document.querySelector(`[data-item-id="${id}"]`)).filter(Boolean);
+  cards.sort((a, b) => (a.dataset.itemCreated < b.dataset.itemCreated ? -1 : 1));
+  for (const card of cards) {
+    const type = card.dataset.itemType;
+    const text = card.dataset.itemText;
+    const fileName = card.dataset.itemFileName;
+    const created = card.dataset.itemCreated ? new Date(card.dataset.itemCreated).toLocaleString() : '';
+    win.document.write(`<div class="item"><div class="item-time">${created}</div>`);
+    if (type === 'message') {
+      win.document.write(`<div class="item-body">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`);
+    } else if (type === 'voice') {
+      win.document.write(`<div class="item-file">🎤 Voice message</div>`);
+    } else if (type === 'video-msg') {
+      win.document.write(`<div class="item-file">📹 Video message</div>`);
+    } else {
+      win.document.write(`<div class="item-file">📄 File: ${fileName.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`);
+    }
+    win.document.write(`</div>`);
+  }
+  win.document.write(`<script>window.onload=()=>window.print()<\/script></body></html>`);
+  win.document.close();
+  toast('PDF print dialog opened');
 }
 
 // ===================== EMOJI PICKER =====================
