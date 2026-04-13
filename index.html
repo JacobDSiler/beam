@@ -102,15 +102,18 @@ input::placeholder{color:var(--text3)}
 .box-meta{display:flex;justify-content:center;gap:16px;margin-top:12px}
 .box-meta span{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px}
 
-.box-actions{display:flex;justify-content:center;gap:8px;margin-top:12px}
+.box-actions{display:flex;justify-content:center;gap:6px;margin-top:12px;flex-wrap:wrap}
 .btn-invite{
-  display:inline-flex;align-items:center;gap:6px;
+  display:inline-flex;align-items:center;gap:5px;
   background:var(--surface2);border:1px solid var(--surface3);
-  color:var(--text2);padding:8px 16px;border-radius:var(--radius-sm);
-  font-size:12px;font-weight:600;letter-spacing:.3px;
+  color:var(--text2);padding:7px 12px;border-radius:var(--radius-sm);
+  font-size:11px;font-weight:600;letter-spacing:.3px;white-space:nowrap;
 }
 .btn-invite:hover{border-color:var(--beam);color:var(--beam)}
-.btn-invite svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.btn-invite svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+/* Alert button gets amber accent to signal urgency */
+#btn-ring-bell{border-color:rgba(245,158,11,.35);color:#f59e0b}
+#btn-ring-bell:hover{border-color:#f59e0b;background:rgba(245,158,11,.1);color:#f59e0b}
 
 .connection-status{
   display:flex;align-items:center;gap:8px;padding:10px 16px;
@@ -332,9 +335,9 @@ input::placeholder{color:var(--text3)}
 }
 .back-btn:hover{color:var(--beam)}
 
-.storage-meter{margin-top:8px}
-.storage-meter-label{font-size:11px;color:var(--text3);display:flex;justify-content:space-between;margin-bottom:4px}
-.storage-meter-track{height:4px;background:var(--surface3);border-radius:2px;overflow:hidden}
+.storage-meter{margin-top:6px}
+.storage-meter-label{font-size:10px;color:var(--text3);display:flex;justify-content:space-between;margin-bottom:3px}
+.storage-meter-track{height:3px;background:var(--surface3);border-radius:2px;overflow:hidden}
 .storage-meter-fill{height:100%;background:var(--beam);border-radius:2px;transition:width .3s}
 .storage-meter-fill.warning{background:var(--warn)}
 
@@ -566,7 +569,7 @@ input::placeholder{color:var(--text3)}
         </button>
         <button class="btn-invite" onclick="copyBoxCode()">
           <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-          Copy code
+          Copy
         </button>
         <button class="btn-invite" id="btn-subscribe" onclick="showSubscribeModal()">
           <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
