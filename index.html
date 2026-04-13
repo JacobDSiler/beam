@@ -576,6 +576,10 @@ input::placeholder{color:var(--text3)}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           Expiry
         </button>
+        <button class="btn-invite" id="btn-ring-bell" onclick="ringBell()" title="Send urgent notification to all subscribers">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/><circle cx="12" cy="8" r="1" fill="currentColor"/></svg>
+          Alert
+        </button>
       </div>
     </div>
 
@@ -3117,12 +3121,25 @@ async function unsubscribe() {
   }
 }
 
-async function notifySubscribers(itemType, itemName) {
+async function notifySubscribers(itemType, itemName, urgent = false) {
   if (!currentBox || NOTIFY_WORKER_URL === 'YOUR_WORKER_URL') return;
-  
+
+  // Rate limit: one automatic notification per box per 24 hours
+  // Urgent (bell button) bypasses this but has its own 1-hour cooldown
+  const rateLimitKey = 'beam_notified_' + currentBox.code;
+  const lastSent = parseInt(localStorage.getItem(rateLimitKey) || '0');
+  const hoursSince = (Date.now() - lastSent) / (1000 * 60 * 60);
+
+  if (!urgent && hoursSince < 24) {
+    console.log('Notification skipped — last sent ' + hoursSince.toFixed(1) + 'h ago (limit: 24h)');
+    return;
+  }
+
+  // Record this send time
+  localStorage.setItem(rateLimitKey, String(Date.now()));
+
   const boxUrl = window.location.origin + window.location.pathname + '?box=' + encodeURIComponent(currentBox.code);
-  
-  // Just ping the Worker — it reads subscribers from Firestore itself
+
   fetch(NOTIFY_WORKER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -3130,13 +3147,43 @@ async function notifySubscribers(itemType, itemName) {
       boxCode: currentBox.code,
       itemType,
       itemName: itemName || '',
-      boxUrl
+      boxUrl,
+      urgent: !!urgent
     })
   }).then(r => r.json()).then(data => {
     if (data.sent > 0) console.log('Notifications sent:', data.sent);
   }).catch(err => {
     console.log('Notify ping failed (non-critical):', err);
   });
+}
+
+async function ringBell() {
+  if (!currentBox) return;
+
+  // 1-hour cooldown for the bell button
+  const bellKey = 'beam_bell_' + currentBox.code;
+  const lastRung = parseInt(localStorage.getItem(bellKey) || '0');
+  const minsSince = (Date.now() - lastRung) / (1000 * 60);
+
+  if (minsSince < 60) {
+    const minsLeft = Math.ceil(60 - minsSince);
+    toast('Alert on cooldown — available again in ' + minsLeft + ' min', true);
+    return;
+  }
+
+  if (!confirm('Send an urgent alert to all subscribers of this mailbox?')) return;
+
+  localStorage.setItem(bellKey, String(Date.now()));
+  // Reset the regular rate limit so the next automatic notification goes out fresh
+  localStorage.removeItem('beam_notified_' + currentBox.code);
+
+  // Visual feedback
+  const btn = document.getElementById('btn-ring-bell');
+  if (btn) { btn.style.borderColor = 'var(--warn)'; btn.style.color = 'var(--warn)'; }
+  setTimeout(() => { if (btn) { btn.style.borderColor = ''; btn.style.color = ''; } }, 3000);
+
+  await notifySubscribers('alert', '', true);
+  toast('\uD83D\uDD14 Urgent alert sent to all subscribers');
 }
 
 // ===================== EXPIRY =====================
