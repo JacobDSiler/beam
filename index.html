@@ -145,6 +145,13 @@ input::placeholder{color:var(--text3)}
 .emoji-insert-btn:hover{background:var(--surface3);transform:scale(1.2)}
 
 .items-section h4{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:600}
+.vault-section{margin-top:12px;border:1px solid var(--surface3);border-radius:var(--radius-sm);overflow:hidden}
+.vault-header{width:100%;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:var(--surface2);border:none;cursor:pointer;transition:background .15s}
+.vault-header:hover{background:var(--surface3)}
+.vault-section.unlocked .vault-header{background:rgba(124,92,255,.08);border-bottom:1px solid var(--accent-dim)}
+#vault-body{padding:12px 14px}
+.vault-item-action{font-size:11px;padding:4px 10px;border-radius:5px;border:1px solid var(--surface3);background:var(--surface2);color:var(--text2);cursor:pointer;font-family:var(--font-sans);transition:all .15s;white-space:nowrap}
+.vault-item-action:hover{border-color:var(--beam);color:var(--beam)}
 .item-list{display:flex;flex-direction:column;gap:8px}
 .item-card{
   background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius-sm);
@@ -815,6 +822,71 @@ input::placeholder{color:var(--text3)}
         <div class="empty-state">This mailbox is empty</div>
       </div>
     </div>
+
+    <!-- Vault -->
+    <div class="vault-section" id="vault-section">
+      <button class="vault-header" onclick="toggleVault()">
+        <span style="display:flex;align-items:center;gap:8px">
+          <span id="vault-lock-icon">🔒</span>
+          <span style="font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text2)">Vault</span>
+          <span id="vault-count-badge" style="display:none;font-size:10px;background:var(--accent-dim);color:var(--accent);padding:1px 7px;border-radius:10px;font-weight:700"></span>
+        </span>
+        <span id="vault-chevron" style="font-size:12px;color:var(--text3);transition:transform .2s">▼</span>
+      </button>
+      <div id="vault-body" style="display:none">
+        <div id="vault-lock-row" style="display:none;padding:10px 0">
+          <div class="field-group" style="margin-bottom:8px">
+            <div class="pw-wrap">
+              <input type="password" id="vault-passcode-input" placeholder="Enter vault passcode" onkeydown="if(event.key==='Enter')unlockVault()">
+              <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
+            </div>
+          </div>
+          <button class="btn-primary" style="width:100%;padding:10px" onclick="unlockVault()">Unlock Vault</button>
+        </div>
+        <div id="vault-actions-bar" style="display:none;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+          <span style="font-size:11px;color:var(--text3);flex:1">Vault contents</span>
+          <button class="sel-action-btn" onclick="showVaultPasscodeModal()" id="vault-passcode-btn">🔑 Set passcode</button>
+          <button class="sel-action-btn" onclick="lockVault()" style="color:var(--accent)">Lock</button>
+        </div>
+        <div class="item-list" id="vault-list">
+          <div class="empty-state">Vault is empty — move files here to store them privately</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Vault Passcode Modal -->
+<div class="modal-overlay" id="vault-passcode-modal">
+  <div class="modal">
+    <h3 id="vpm-title">🔒 Vault Passcode</h3>
+    <p id="vpm-desc">Set a passcode to protect your vault.</p>
+    <div class="field-group" id="vpm-current-wrap" style="display:none">
+      <label>Current vault passcode</label>
+      <div class="pw-wrap">
+        <input type="password" id="vpm-current" placeholder="Current passcode">
+        <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
+      </div>
+    </div>
+    <div class="field-group">
+      <label id="vpm-new-label">New passcode</label>
+      <div class="pw-wrap">
+        <input type="password" id="vpm-new" placeholder="Enter vault passcode" maxlength="64">
+        <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
+      </div>
+    </div>
+    <div class="field-group">
+      <label>Confirm passcode</label>
+      <div class="pw-wrap">
+        <input type="password" id="vpm-confirm" placeholder="Re-enter passcode" maxlength="64" onkeydown="if(event.key==='Enter')saveVaultPasscode()">
+        <button type="button" class="pw-eye" onclick="togglePwVis(this)" tabindex="-1">&#x1f441;</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeVaultPasscodeModal()">Cancel</button>
+      <button class="btn-secondary" id="vpm-remove-btn" onclick="removeVaultPasscode()" style="display:none;color:var(--warn);border-color:var(--warn)">Remove passcode</button>
+      <button class="btn-primary" onclick="saveVaultPasscode()">Save</button>
+    </div>
   </div>
 </div>
 
@@ -1152,6 +1224,21 @@ function enterMailbox(code) {
   // Clean up any stale waiting doc left from a previous session before listening
   cleanStaleWaitingDoc().then(() => listenForWaitingCall(code));
   updateCallUI();
+  // Reset vault UI for new session and show badge count
+  vaultUnlocked = false;
+  vaultOpen = false;
+  document.getElementById('vault-body').style.display = 'none';
+  document.getElementById('vault-chevron').style.transform = '';
+  document.getElementById('vault-section').classList.remove('unlocked');
+  // Show count badge without opening vault
+  db.collection('boxes').doc(code).collection('vault').get().then(snap => {
+    const badge = document.getElementById('vault-count-badge');
+    if (snap.size > 0) { badge.textContent = snap.size; badge.style.display = 'inline'; }
+    else { badge.style.display = 'none'; }
+    // Set lock icon based on whether vault has a passcode
+    document.getElementById('vault-lock-icon').textContent =
+      currentBox?.vaultPasscodeHash ? '🔒' : '🔓';
+  }).catch(() => {});
   const saved = localStorage.getItem('beam_sub_' + code);
   const subBtn = document.getElementById('btn-subscribe');
   if (saved) {
@@ -1174,6 +1261,7 @@ function leaveBox() {
   hideIncomingCallBanner();
   cleanupWebRTC();
   stopExpirySweeper();
+  cleanupVault();
   currentBox = null;
   currentPasscode = null;
   showScreen('screen-home');
@@ -1329,6 +1417,9 @@ function renderItem(item) {
     } else {
       downloadBtn = `<button class="btn-icon" title="Download" onclick="downloadItem('${item.id}')">&#x2b07;</button>`;
     }
+    const vaultBtn = (!isRTCOnly && item.fileData)
+      ? `<button class="btn-icon" title="Move to Vault" onclick="moveToVault('${item.id}')">🔒</button>`
+      : '';
     div.innerHTML = `<div class="item-icon">${fileIcon(item.fileName)}</div>
       <div class="item-info">
         <div class="item-name">${nameDisplay}</div>
@@ -1338,6 +1429,7 @@ function renderItem(item) {
       </div>
       <div class="item-actions">
         ${downloadBtn}
+        ${vaultBtn}
         <button class="btn-icon" title="Delete" onclick="promptDelete('${item.id}','','file')">&#x1f5d1;</button>
       </div>`;
   }
@@ -3951,6 +4043,257 @@ function scrollToItem(itemId) {
   card.style.transition = 'border-color .2s';
   card.style.borderColor = 'var(--beam)';
   setTimeout(() => { card.style.borderColor = ''; }, 1200);
+}
+
+// ===================== VAULT =====================
+// NOTE: Add this to your Firestore rules inside match /boxes/{boxId}:
+//   match /vault/{vaultId} { allow read, write: if true; }
+let vaultUnlocked = false;
+let vaultOpen = false;
+let vaultUnsub = null;
+
+function vaultRef() {
+  return db.collection('boxes').doc(currentBox.code).collection('vault');
+}
+
+function toggleVault() {
+  vaultOpen = !vaultOpen;
+  const body = document.getElementById('vault-body');
+  const chevron = document.getElementById('vault-chevron');
+  body.style.display = vaultOpen ? 'block' : 'none';
+  chevron.style.transform = vaultOpen ? 'rotate(180deg)' : '';
+
+  if (vaultOpen) {
+    const hasVaultPass = !!currentBox.vaultPasscodeHash;
+    const lockRow = document.getElementById('vault-lock-row');
+    const actionsBar = document.getElementById('vault-actions-bar');
+    const vaultList = document.getElementById('vault-list');
+    if (hasVaultPass && !vaultUnlocked) {
+      lockRow.style.display = 'block';
+      actionsBar.style.display = 'none';
+      vaultList.style.display = 'none';
+      setTimeout(() => document.getElementById('vault-passcode-input').focus(), 100);
+    } else {
+      openVault();
+    }
+  } else {
+    if (vaultUnsub) { vaultUnsub(); vaultUnsub = null; }
+  }
+}
+
+async function unlockVault() {
+  const input = document.getElementById('vault-passcode-input').value;
+  if (!input) { toast('Enter the vault passcode', true); return; }
+  const hash = await hashPasscode(input);
+  if (hash !== currentBox.vaultPasscodeHash) { toast('Wrong vault passcode', true); return; }
+  document.getElementById('vault-passcode-input').value = '';
+  vaultUnlocked = true;
+  openVault();
+}
+
+function openVault() {
+  vaultUnlocked = true;
+  document.getElementById('vault-lock-row').style.display = 'none';
+  document.getElementById('vault-actions-bar').style.display = 'flex';
+  document.getElementById('vault-list').style.display = '';
+  document.getElementById('vault-section').classList.add('unlocked');
+  document.getElementById('vault-lock-icon').textContent = '🔓';
+  updateVaultPasscodeBtn();
+  listenToVault();
+}
+
+function lockVault() {
+  vaultUnlocked = false;
+  vaultOpen = false;
+  if (vaultUnsub) { vaultUnsub(); vaultUnsub = null; }
+  document.getElementById('vault-body').style.display = 'none';
+  document.getElementById('vault-chevron').style.transform = '';
+  document.getElementById('vault-section').classList.remove('unlocked');
+  document.getElementById('vault-lock-icon').textContent = currentBox?.vaultPasscodeHash ? '🔒' : '🔓';
+}
+
+function cleanupVault() {
+  if (vaultUnsub) { vaultUnsub(); vaultUnsub = null; }
+  vaultUnlocked = false;
+  vaultOpen = false;
+  const body = document.getElementById('vault-body');
+  const section = document.getElementById('vault-section');
+  if (body) body.style.display = 'none';
+  if (section) section.classList.remove('unlocked');
+}
+
+function listenToVault() {
+  if (vaultUnsub) { vaultUnsub(); }
+  vaultUnsub = vaultRef().orderBy('vaultedAt', 'asc').onSnapshot(snap => {
+    const list = document.getElementById('vault-list');
+    const badge = document.getElementById('vault-count-badge');
+    const count = snap.size;
+    if (badge) { badge.textContent = count; badge.style.display = count > 0 ? 'inline' : 'none'; }
+    if (!list) return;
+    if (snap.empty) {
+      list.innerHTML = '<div class="empty-state">Vault is empty — move files here to store them privately</div>';
+      return;
+    }
+    list.innerHTML = '';
+    snap.forEach(doc => list.appendChild(renderVaultItem({ id: doc.id, ...doc.data() })));
+  }, err => console.log('Vault listen error:', err));
+}
+
+function renderVaultItem(item) {
+  const div = document.createElement('div');
+  div.className = 'item-card';
+  const preview = filePreviewHtml(item);
+  div.innerHTML = `
+    <div class="item-icon">${fileIcon(item.fileName)}</div>
+    <div class="item-info">
+      <div class="item-name">${escapeHtml(item.fileName || '')}</div>
+      ${preview}
+      <div class="item-meta">${formatBytes(item.size||0)} &middot; vaulted ${timeAgo(item.vaultedAt?.toDate?.())}</div>
+    </div>
+    <div class="item-actions" style="flex-direction:column;gap:4px;align-items:flex-end">
+      <button class="vault-item-action" onclick="downloadVaultItem('${item.id}')">⬇ Download</button>
+      <button class="vault-item-action" onclick="returnFromVault('${item.id}')">↩ Return to feed</button>
+      <button class="vault-item-action" onclick="deleteVaultItem('${item.id}')" style="color:var(--warn);border-color:rgba(255,107,107,.3)">🗑 Delete</button>
+    </div>`;
+  return div;
+}
+
+async function moveToVault(itemId) {
+  if (!currentBox) return;
+  if (currentBox.vaultPasscodeHash && !vaultUnlocked) {
+    toast('Open and unlock the vault first before moving files into it', true);
+    return;
+  }
+  try {
+    const itemDoc = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
+    if (!itemDoc.exists) { toast('Item not found', true); return; }
+    const data = itemDoc.data();
+    if (!data.fileData) { toast('Only cloud-stored files can be moved to the vault', true); return; }
+
+    await vaultRef().doc(itemId).set({
+      ...data,
+      vaultedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).delete();
+    toast('Moved to vault 🔒');
+
+    // Open vault so user sees it
+    if (!vaultOpen) {
+      document.getElementById('vault-body').style.display = 'block';
+      document.getElementById('vault-chevron').style.transform = 'rotate(180deg)';
+      vaultOpen = true;
+      openVault();
+    } else if (vaultUnsub) {
+      // listener will refresh automatically
+    } else {
+      listenToVault();
+    }
+  } catch(e) {
+    toast('Failed to move to vault: ' + (e.code || e.message), true);
+  }
+}
+
+async function returnFromVault(itemId) {
+  if (!currentBox) return;
+  try {
+    const vaultDoc = await vaultRef().doc(itemId).get();
+    if (!vaultDoc.exists) { toast('Vault item not found', true); return; }
+    const { vaultedAt, ...itemData } = vaultDoc.data();
+    itemData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).set(itemData);
+    await vaultRef().doc(itemId).delete();
+    toast('Returned to feed');
+  } catch(e) { toast('Failed to return from vault: ' + (e.code || e.message), true); }
+}
+
+async function downloadVaultItem(itemId) {
+  try {
+    const doc = await vaultRef().doc(itemId).get();
+    const data = doc.data();
+    if (!data?.fileData) { toast('No file data', true); return; }
+    const byteChars = atob(data.fileData);
+    const byteArray = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([byteArray], { type: data.mimeType || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = data.fileName || 'file';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch(e) { toast('Download failed', true); }
+}
+
+async function deleteVaultItem(itemId) {
+  if (!confirm('Permanently delete this file from the vault?')) return;
+  try {
+    const doc = await vaultRef().doc(itemId).get();
+    const size = doc.data()?.size || 0;
+    await vaultRef().doc(itemId).delete();
+    if (size) await db.collection('boxes').doc(currentBox.code)
+      .update({ totalBytes: firebase.firestore.FieldValue.increment(-size) });
+    toast('Deleted from vault');
+  } catch(e) { toast('Delete failed', true); }
+}
+
+function showVaultPasscodeModal() {
+  const hasPass = !!currentBox.vaultPasscodeHash;
+  document.getElementById('vpm-title').textContent = hasPass ? '🔒 Change Vault Passcode' : '🔒 Set Vault Passcode';
+  document.getElementById('vpm-desc').textContent = hasPass
+    ? 'Enter the current passcode, then choose a new one.'
+    : 'Add a passcode to lock the vault.';
+  document.getElementById('vpm-current-wrap').style.display = hasPass ? 'flex' : 'none';
+  document.getElementById('vpm-remove-btn').style.display = hasPass ? 'inline-flex' : 'none';
+  document.getElementById('vpm-new-label').textContent = hasPass ? 'New passcode' : 'Passcode';
+  ['vpm-current','vpm-new','vpm-confirm'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('vault-passcode-modal').classList.add('active');
+  setTimeout(() => document.getElementById(hasPass ? 'vpm-current' : 'vpm-new').focus(), 100);
+}
+
+function closeVaultPasscodeModal() {
+  document.getElementById('vault-passcode-modal').classList.remove('active');
+}
+
+async function saveVaultPasscode() {
+  const hasPass = !!currentBox.vaultPasscodeHash;
+  const cur = document.getElementById('vpm-current').value;
+  const nw = document.getElementById('vpm-new').value;
+  const conf = document.getElementById('vpm-confirm').value;
+  if (hasPass) {
+    if (!cur) { toast('Enter the current vault passcode', true); return; }
+    if (await hashPasscode(cur) !== currentBox.vaultPasscodeHash) { toast('Current vault passcode is incorrect', true); return; }
+  }
+  if (!nw) { toast('Enter a passcode', true); return; }
+  if (nw !== conf) { toast('Passcodes do not match', true); return; }
+  if (nw.length < 3) { toast('Passcode must be at least 3 characters', true); return; }
+  try {
+    const hash = await hashPasscode(nw);
+    await db.collection('boxes').doc(currentBox.code).update({ vaultPasscodeHash: hash });
+    currentBox.vaultPasscodeHash = hash;
+    closeVaultPasscodeModal();
+    updateVaultPasscodeBtn();
+    toast(hasPass ? 'Vault passcode changed' : 'Vault passcode set 🔒');
+  } catch(e) { toast('Failed: ' + (e.code || e.message), true); }
+}
+
+async function removeVaultPasscode() {
+  const cur = document.getElementById('vpm-current').value;
+  if (!cur) { toast('Enter the current vault passcode to confirm', true); return; }
+  if (await hashPasscode(cur) !== currentBox.vaultPasscodeHash) { toast('Current vault passcode is incorrect', true); return; }
+  if (!confirm('Remove the vault passcode? The vault will be accessible to anyone who opens this mailbox.')) return;
+  try {
+    await db.collection('boxes').doc(currentBox.code).update({ vaultPasscodeHash: null });
+    currentBox.vaultPasscodeHash = null;
+    closeVaultPasscodeModal();
+    updateVaultPasscodeBtn();
+    toast('Vault passcode removed');
+  } catch(e) { toast('Failed: ' + (e.code || e.message), true); }
+}
+
+function updateVaultPasscodeBtn() {
+  const btn = document.getElementById('vault-passcode-btn');
+  if (btn) btn.textContent = currentBox?.vaultPasscodeHash ? '🔑 Change passcode' : '🔑 Set passcode';
+  const icon = document.getElementById('vault-lock-icon');
+  if (icon) icon.textContent = currentBox?.vaultPasscodeHash ? (vaultUnlocked ? '🔓' : '🔒') : '🔓';
 }
 
 // ===================== HELPERS =====================
