@@ -805,6 +805,7 @@ input::placeholder{color:var(--text3)}
         <button class="sel-action-btn" onclick="selectAll()">Select all</button>
         <button class="sel-action-btn" onclick="deselectAll()">Deselect all</button>
         <button class="sel-action-btn sel-export" onclick="showExportPicker()">⬇ Export</button>
+        <button class="sel-action-btn" onclick="moveSelectedToVault()" style="color:var(--accent);border-color:var(--accent-dim)">🔒 Vault</button>
         <button class="sel-action-btn sel-delete" onclick="deleteSelected()">🗑 Delete</button>
         <button class="sel-action-btn" onclick="toggleSelectMode()">Cancel</button>
       </div>
@@ -3653,6 +3654,40 @@ async function deleteSelected() {
   } catch(e) { toast('Delete failed: ' + e.message, true); }
 }
 
+async function moveSelectedToVault() {
+  if (!selectedItems.size) { toast('Nothing selected', true); return; }
+  if (!currentBox) return;
+  if (currentBox.vaultPasscodeHash && !vaultUnlocked) {
+    toast('Open and unlock the vault first', true);
+    return;
+  }
+
+  const ids = [...selectedItems];
+  let moved = 0, failed = 0;
+
+  for (const id of ids) {
+    try {
+      const itemDoc = await db.collection('boxes').doc(currentBox.code).collection('items').doc(id).get();
+      if (!itemDoc.exists) continue;
+      const data = itemDoc.data();
+      await vaultRef().doc(id).set({ ...data, vaultedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      await db.collection('boxes').doc(currentBox.code).collection('items').doc(id).delete();
+      moved++;
+    } catch(e) { failed++; }
+  }
+
+  toast(failed ? `Moved ${moved}, ${failed} failed` : `Moved ${moved} item(s) to vault 🔒`);
+  toggleSelectMode();
+
+  // Open vault if not already open
+  if (!vaultOpen) {
+    document.getElementById('vault-body').style.display = 'block';
+    document.getElementById('vault-chevron').style.transform = 'rotate(180deg)';
+    vaultOpen = true;
+    openVault();
+  }
+}
+
 function showExportPicker() {
   if (!selectedItems.size) { toast('Nothing selected', true); return; }
   const picker = document.getElementById('export-picker');
@@ -4142,33 +4177,68 @@ function listenToVault() {
 function renderVaultItem(item) {
   const div = document.createElement('div');
   div.className = 'item-card';
-  const preview = filePreviewHtml(item);
-  div.innerHTML = `
-    <div class="item-icon">${fileIcon(item.fileName)}</div>
-    <div class="item-info">
-      <div class="item-name">${escapeHtml(item.fileName || '')}</div>
-      ${preview}
-      <div class="item-meta">${formatBytes(item.size||0)} &middot; vaulted ${timeAgo(item.vaultedAt?.toDate?.())}</div>
-    </div>
+  const type = item.type || 'file';
+  const actions = `
     <div class="item-actions" style="flex-direction:column;gap:4px;align-items:flex-end">
-      <button class="vault-item-action" onclick="downloadVaultItem('${item.id}')">⬇ Download</button>
-      <button class="vault-item-action" onclick="returnFromVault('${item.id}')">↩ Return to feed</button>
+      ${(type === 'file' || type === 'voice' || type === 'video-msg') && item.fileData
+        ? `<button class="vault-item-action" onclick="downloadVaultItem('${item.id}')">⬇ Download</button>` : ''}
+      <button class="vault-item-action" onclick="returnFromVault('${item.id}')">↩ Return</button>
       <button class="vault-item-action" onclick="deleteVaultItem('${item.id}')" style="color:var(--warn);border-color:rgba(255,107,107,.3)">🗑 Delete</button>
     </div>`;
+  const vaultedMeta = `<div class="item-meta">vaulted ${timeAgo(item.vaultedAt?.toDate?.())}</div>`;
+
+  if (type === 'message') {
+    div.innerHTML = `
+      <div class="item-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></div>
+      <div class="item-info">
+        <div style="font-size:13px;color:var(--text);white-space:normal;line-height:1.5;word-break:break-word">${escapeHtml(item.text || '(empty)')}</div>
+        ${vaultedMeta}
+      </div>
+      ${actions}`;
+  } else if (type === 'voice') {
+    const src = item.fileData ? 'data:audio/webm;base64,' + item.fileData : '';
+    div.innerHTML = `
+      <div class="item-icon">🎤</div>
+      <div class="item-info">
+        <div class="item-name">Voice message</div>
+        ${src ? '<audio controls src="' + src + '" style="width:100%;margin-top:6px;max-width:260px"></audio>' : ''}
+        ${vaultedMeta}
+      </div>
+      ${actions}`;
+  } else if (type === 'video-msg') {
+    const src = item.fileData ? 'data:video/webm;base64,' + item.fileData : '';
+    div.innerHTML = `
+      <div class="item-icon">📹</div>
+      <div class="item-info">
+        <div class="item-name">Video message</div>
+        ${src ? '<video controls src="' + src + '" style="width:100%;margin-top:6px;max-width:260px;border-radius:6px"></video>' : ''}
+        ${vaultedMeta}
+      </div>
+      ${actions}`;
+  } else {
+    const preview = filePreviewHtml(item);
+    div.innerHTML = `
+      <div class="item-icon">${fileIcon(item.fileName)}</div>
+      <div class="item-info">
+        <div class="item-name">${escapeHtml(item.fileName || '')}</div>
+        ${preview}
+        <div class="item-meta">${formatBytes(item.size||0)} &middot; vaulted ${timeAgo(item.vaultedAt?.toDate?.())}</div>
+      </div>
+      ${actions}`;
+  }
   return div;
 }
 
 async function moveToVault(itemId) {
   if (!currentBox) return;
   if (currentBox.vaultPasscodeHash && !vaultUnlocked) {
-    toast('Open and unlock the vault first before moving files into it', true);
+    toast('Open and unlock the vault first before moving items into it', true);
     return;
   }
   try {
     const itemDoc = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
     if (!itemDoc.exists) { toast('Item not found', true); return; }
     const data = itemDoc.data();
-    if (!data.fileData) { toast('Only cloud-stored files can be moved to the vault', true); return; }
 
     await vaultRef().doc(itemId).set({
       ...data,
