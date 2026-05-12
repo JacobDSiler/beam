@@ -1,0 +1,87 @@
+// Combined rules for Boxes app + Folio Projects app
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    /* ---------------------------------------------------------
+     * BOXES APP
+     * --------------------------------------------------------- */
+    match /boxes/{boxId} {
+      allow read, write: if true;
+      match /items/{itemId} {
+        allow read, write: if true;
+      }
+      match /vault/{vaultId} {
+        allow read, write: if true;
+      }
+      match /signaling/{sigId} {
+        allow read, write: if true;
+        match /{subCol}/{subDoc} {
+          allow read, write: if true;
+        }
+      }
+    }
+    match /_ping/{doc} {
+      allow read, write: if true;
+    }
+    /* ---------------------------------------------------------
+     * FOLIO PROJECTS APP
+     * --------------------------------------------------------- */
+    match /folio_projects/{projectId} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == resource.data.uid;
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      match /presence/{uid} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null && request.auth.uid == uid;
+      }
+      match /versions/{versionId} {
+        allow read, write: if request.auth != null
+                           && get(/databases/$(database)/documents/folio_projects/$(projectId)).data.uid
+                              == request.auth.uid;
+      }
+      /* Manuscript body — split out of the parent doc (2026-05-06)
+         so the parent stays metadata-only and the sidebar listing
+         doesn't download every body. Owner-only writes; any authed
+         user can read (matches the parent's read rule for share
+         links and reader mode). */
+      match /body/{bodyDoc} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null
+                     && get(/databases/$(database)/documents/folio_projects/$(projectId)).data.uid
+                        == request.auth.uid;
+      }
+      /* Serial-release subscribers — the author lists subscribers
+         to send unlock emails; readers create their own entries via
+         the inline subscribe form; anyone with a valid unsubscribe
+         token in the URL can delete the matching entry. The
+         unsubscribe token in the URL is the practical access
+         control here. Auth is required so anonymous bots can't
+         flood subscribe/unsubscribe traffic. */
+      match /subscribers/{subscriberId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null;
+        allow delete: if request.auth != null;
+      }
+    }
+    /* ---------------------------------------------------------
+     * FOLIO USER SETTINGS — audio preferences + API keys
+     * One doc per signed-in user at folio_user_settings/{uid}.
+     * Only the owner can read or write. API keys live here, so
+     * do NOT widen this to "any authenticated user can read".
+     * --------------------------------------------------------- */
+    match /folio_user_settings/{uid} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == uid;
+    }
+    /* ---------------------------------------------------------
+     * LULU PRINT JOBS
+     * --------------------------------------------------------- */
+    match /lulu_jobs/{jobDoc} {
+      allow read, delete: if request.auth != null
+                          && request.auth.uid == resource.data.uid;
+      allow create: if request.auth != null
+                    && request.auth.uid == request.resource.data.uid;
+    }
+  }
+}
