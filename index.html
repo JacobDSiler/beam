@@ -131,7 +131,7 @@ input::placeholder{color:var(--text3)}
   cursor:pointer;position:relative;display:flex;align-items:center;gap:10px;
 }
 .drop-zone:hover,.drop-zone.dragover{border-color:var(--beam);background:var(--beam-glow);padding:20px 14px}
-.drop-zone:hover .drop-zone-icon,.drop-zone.dragover .drop-zone-icon{font-size:28px;transition:font-size .2s}
+.drop-zone:hover .drop-zone-icon,.drop-zone.dragover .drop-zone-icon{font-size:28px}
 .drop-zone-icon{font-size:18px;margin-bottom:0;opacity:.7;transition:font-size .2s}
 .drop-zone-text{font-size:12px;color:var(--text2)}
 .drop-zone-hint{font-size:11px;color:var(--text3);margin-top:0;margin-left:auto}
@@ -4477,4 +4477,141 @@ function showVaultPasscodeModal() {
   document.getElementById('vpm-current-wrap').style.display = hasPass ? 'flex' : 'none';
   document.getElementById('vpm-remove-btn').style.display = hasPass ? 'inline-flex' : 'none';
   document.getElementById('vpm-new-label').textContent = hasPass ? 'New passcode' : 'Passcode';
-  ['vpm-current','vpm-new','vpm-confirm
+  ['vpm-current','vpm-new','vpm-confirm'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('vault-passcode-modal').classList.add('active');
+  setTimeout(() => document.getElementById(hasPass ? 'vpm-current' : 'vpm-new').focus(), 100);
+}
+
+function closeVaultPasscodeModal() {
+  document.getElementById('vault-passcode-modal').classList.remove('active');
+}
+
+async function saveVaultPasscode() {
+  const hasPass = !!currentBox.vaultPasscodeHash;
+  const cur = document.getElementById('vpm-current').value;
+  const nw = document.getElementById('vpm-new').value;
+  const conf = document.getElementById('vpm-confirm').value;
+  if (hasPass) {
+    if (!cur) { toast('Enter the current vault passcode', true); return; }
+    if (await hashPasscode(cur) !== currentBox.vaultPasscodeHash) { toast('Current vault passcode is incorrect', true); return; }
+  }
+  if (!nw) { toast('Enter a passcode', true); return; }
+  if (nw !== conf) { toast('Passcodes do not match', true); return; }
+  if (nw.length < 3) { toast('Passcode must be at least 3 characters', true); return; }
+  try {
+    const hash = await hashPasscode(nw);
+    await db.collection('boxes').doc(currentBox.code).update({ vaultPasscodeHash: hash });
+    currentBox.vaultPasscodeHash = hash;
+    closeVaultPasscodeModal();
+    updateVaultPasscodeBtn();
+    toast(hasPass ? 'Vault passcode changed' : 'Vault passcode set 🔒');
+  } catch(e) { toast('Failed: ' + (e.code || e.message), true); }
+}
+
+async function removeVaultPasscode() {
+  const cur = document.getElementById('vpm-current').value;
+  if (!cur) { toast('Enter the current vault passcode to confirm', true); return; }
+  if (await hashPasscode(cur) !== currentBox.vaultPasscodeHash) { toast('Current vault passcode is incorrect', true); return; }
+  if (!confirm('Remove the vault passcode? The vault will be accessible to anyone who opens this mailbox.')) return;
+  try {
+    await db.collection('boxes').doc(currentBox.code).update({ vaultPasscodeHash: null });
+    currentBox.vaultPasscodeHash = null;
+    closeVaultPasscodeModal();
+    updateVaultPasscodeBtn();
+    toast('Vault passcode removed');
+  } catch(e) { toast('Failed: ' + (e.code || e.message), true); }
+}
+
+function updateVaultPasscodeBtn() {
+  const btn = document.getElementById('vault-passcode-btn');
+  if (btn) btn.textContent = currentBox?.vaultPasscodeHash ? '🔑 Change passcode' : '🔑 Set passcode';
+  const icon = document.getElementById('vault-lock-icon');
+  if (icon) icon.textContent = currentBox?.vaultPasscodeHash ? (vaultUnlocked ? '🔓' : '🔒') : '🔓';
+}
+
+// ===================== HELPERS =====================
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+// Returns an inline preview element string for a file item, or '' if not previewable
+function filePreviewHtml(item) {
+  if (!item.fileData || !item.mimeType) return '';
+  const mime = item.mimeType.toLowerCase();
+  const src = `data:${item.mimeType};base64,${item.fileData}`;
+
+  // Image preview
+  if (mime.startsWith('image/')) {
+    return `<div class="file-preview-img"><img src="${src}" alt="${escapeHtml(item.fileName||'')}" loading="lazy"></div>`;
+  }
+
+  // Text / code / JSON / CSV snippet
+  const isText = mime.startsWith('text/') || ['application/json','application/javascript',
+    'application/xml','application/csv','application/x-sh'].includes(mime);
+  const textExt = /\.(txt|md|json|js|ts|jsx|tsx|css|html|htm|xml|csv|yaml|yml|sh|py|rb|java|c|cpp|h|rs|go|sql|log)$/i;
+  if (isText || (item.fileName && textExt.test(item.fileName))) {
+    try {
+      const raw = atob(item.fileData);
+      const snippet = raw.slice(0, 200).replace(/\r\n/g,'\n');
+      const display = snippet.length < raw.length ? snippet + '…' : snippet;
+      return `<div class="file-preview-text"><pre>${escapeHtml(display)}</pre></div>`;
+    } catch { return ''; }
+  }
+
+  return '';
+}
+
+// Linkify: turn URLs in already-escaped HTML into clickable links with hover preview
+function linkify(escapedHtml) {
+  // Match http/https URLs (already html-escaped, so & is &amp; etc — match on the escaped form)
+  const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
+  return escapedHtml.replace(urlRegex, url => {
+    // Decode for display (unescape &amp; etc that were in the original text)
+    const decoded = url.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+    let display, domain, favicon;
+    try {
+      const u = new URL(decoded);
+      domain = u.hostname.replace(/^www\./, '');
+      favicon = `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=16`;
+      // Truncate long paths for display
+      const path = u.pathname + u.search;
+      display = domain + (path.length > 30 ? path.slice(0, 28) + '…' : path === '/' ? '' : path);
+    } catch {
+      display = decoded.length > 40 ? decoded.slice(0, 38) + '…' : decoded;
+      domain = decoded;
+      favicon = null;
+    }
+    const safeUrl = url; // already html-escaped
+    const faviconHtml = favicon ? `<img src="${favicon}" width="14" height="14" style="border-radius:2px;flex-shrink:0" onerror="this.style.display='none'">` : '';
+    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="beam-link" data-domain="${escapeHtml(domain)}">${escapeHtml(display)}<span class="beam-link-preview">${faviconHtml}<span>${escapeHtml(domain)}</span></span></a>`;
+  });
+}
+function formatBytes(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+function timeAgo(date) {
+  if (!date) return 'just now';
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s/60)+'m ago';
+  if (s < 86400) return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago';
+}
+function fileIcon(name) {
+  if (!name) return '&#x1f4c4;';
+  const ext = name.split('.').pop().toLowerCase();
+  const m = {pdf:'&#x1f4d5;',doc:'&#x1f4c4;',docx:'&#x1f4c4;',txt:'&#x1f4dd;',jpg:'&#x1f5bc;',jpeg:'&#x1f5bc;',png:'&#x1f5bc;',gif:'&#x1f5bc;',webp:'&#x1f5bc;',svg:'&#x1f5bc;',mp4:'&#x1f3ac;',mov:'&#x1f3ac;',mp3:'&#x1f3b5;',wav:'&#x1f3b5;',zip:'&#x1f4e6;',rar:'&#x1f4e6;',js:'&#x1f4bb;',py:'&#x1f4bb;',html:'&#x1f4bb;',xlsx:'&#x1f4ca;',csv:'&#x1f4ca;'};
+  return m[ext] || '&#x1f4c4;';
+}
+
+// ===================== AUTO-JOIN FROM URL =====================
+window.addEventListener('DOMContentLoaded', () => {
+  // Real-time input sanitizer — strip dashes from numeric codes as user types
+  const joinInput = document.getElementById('join-code');
+  joinInput.addEventListener('input', () => {
+    const raw = joinInput.value;
+    const stripped = raw.replace(/[^a-zA-Z0-9\-]/g, '');
+    if (raw !== stripped) joinInput.value = stripped;
+  });
+
+  // Auto-join from URL
+  const code = new URLSearchParams(window.location.search).get('box');
+  if (code) setTimeout(() => joinBox(code.toLowerCase().replace(/[^a-z0-9\-]/g, '')), 1000);
+});
+</script>
+</body>
+</html>
