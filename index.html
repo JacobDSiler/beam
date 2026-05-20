@@ -140,6 +140,18 @@ input::placeholder{color:var(--text3)}
 .msg-input-row{display:flex;gap:8px}
 .msg-input-row input{flex:1;font-family:var(--font-sans);font-size:14px}
 .msg-input-row button{padding:12px 20px}
+/* Photo capture */
+#photo-capture{margin-top:8px}
+.photo-capture-card{background:var(--surface);border:1px solid var(--surface3);border-radius:var(--radius-sm);padding:12px 14px}
+.photo-capture-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+#photo-capture-label{font-size:13px;color:var(--text2);font-weight:600}
+.photo-privacy-note{font-size:11px;color:var(--text3);margin-left:auto}
+.photo-stage{border-radius:var(--radius-sm);overflow:hidden;margin-bottom:10px;background:#000;display:flex;align-items:center;justify-content:center}
+.photo-stage video,.photo-stage img{width:100%;display:block;max-height:340px;object-fit:contain}
+.photo-controls{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.photo-btn-sm{padding:8px 16px;font-size:13px}
+.photo-btn-cap{padding:8px 22px;font-size:13px}
+#photo-capture-btn.recording{color:var(--warn)}
 .emoji-insert-btn{
   font-size:22px;background:none;border:none;cursor:pointer;
   border-radius:6px;padding:3px 5px;transition:background .1s,transform .1s;line-height:1;
@@ -791,6 +803,7 @@ input::placeholder{color:var(--text3)}
       <button class="btn-icon" id="emoji-toggle-btn" title="Emoji" onclick="toggleEmojiPanel()" style="flex-shrink:0">😊</button>
       <button class="btn-icon voice-record-btn" id="voice-record-btn" title="Record voice message" onclick="toggleVoiceRecord()">&#x1f3a4;</button>
       <button class="btn-icon" id="video-record-btn" title="Record video message" onclick="toggleVideoRecord()">&#x1f4f9;</button>
+      <button class="btn-icon" id="photo-capture-btn" title="Take a photo" onclick="togglePhotoCapture()">&#x1f4f7;</button>
       <button class="btn-icon" id="item-lock-btn" title="Add passcode to next send" onclick="toggleItemLock()" style="flex-shrink:0">&#x1f513;</button>
       <button class="btn-icon" id="item-expiry-btn" title="Set expiry for next send" onclick="toggleItemExpiry()" style="flex-shrink:0">⏳</button>
       <button class="btn-secondary" onclick="sendMessage()">Send</button>
@@ -817,6 +830,33 @@ input::placeholder{color:var(--text3)}
         </div>
       </div>
     </div>
+    <!-- Photo Capture -->
+    <div id="photo-capture" style="display:none">
+      <div class="photo-capture-card">
+        <div class="photo-capture-head">
+          <span id="photo-capture-label">📷 Camera</span>
+          <span class="photo-privacy-note">🔒 Kept in Beam only — never saved to this device</span>
+        </div>
+        <div id="photo-live-wrap" class="photo-stage">
+          <video id="photo-video" autoplay playsinline muted></video>
+        </div>
+        <div id="photo-review-wrap" class="photo-stage" style="display:none">
+          <img id="photo-review-img" alt="Captured photo">
+        </div>
+        <canvas id="photo-canvas" style="display:none"></canvas>
+        <div id="photo-live-controls" class="photo-controls">
+          <button class="btn-secondary photo-btn-sm" onclick="closePhotoCapture()">Cancel</button>
+          <button class="btn-icon" id="photo-flip-btn" title="Flip camera" onclick="flipPhotoCamera()">🔄</button>
+          <button class="btn-primary photo-btn-cap" onclick="capturePhoto()">📸 Capture</button>
+        </div>
+        <div id="photo-review-controls" class="photo-controls" style="display:none">
+          <button class="btn-secondary photo-btn-sm" onclick="retakePhoto()">↺ Retake</button>
+          <button class="btn-secondary photo-btn-sm" onclick="closePhotoCapture()">Discard</button>
+          <button class="btn-primary photo-btn-cap" onclick="usePhoto()">Use photo</button>
+        </div>
+      </div>
+    </div>
+
     <div id="item-passcode-row" style="display:none;margin-top:-12px">
       <div class="pw-wrap" style="margin-bottom:4px">
         <input type="password" id="item-passcode-input" placeholder="Passcode for this item..." style="width:100%;font-size:13px">
@@ -3133,6 +3173,154 @@ function updateTimerDisplay() {
   const s = String(callSeconds % 60).padStart(2, '0');
   document.getElementById('call-timer').textContent = m + ':' + s;
 }
+
+// ===================== PHOTO CAPTURE =====================
+// Privacy model: a captured photo is NEVER written to device storage.
+// Path: getUserMedia stream -> draw one frame to an in-memory <canvas>
+// -> canvas.toBlob() -> in-memory Blob -> staged like a dropped file
+// -> Beam cloud/RTC storage. The camera stream is stopped (camera light
+// off) the instant we capture, flip, or close the panel, and every
+// object URL is revoked as soon as it is no longer shown.
+let photoStream = null;
+let photoBlob = null;
+let photoReviewUrl = null;
+let photoFacingMode = 'environment'; // open on the rear camera first
+const PHOTO_MAX_EDGE = 1280;         // longest-edge cap keeps files small
+const PHOTO_QUALITIES = [0.85, 0.7, 0.55, 0.42]; // tried until <= MAX_FILE_BYTES
+
+function photoCaptureSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+
+async function togglePhotoCapture() {
+  const panel = document.getElementById('photo-capture');
+  if (panel.style.display === 'block') { closePhotoCapture(); return; }
+  if (!photoCaptureSupported()) { toast('Camera not available on this device', true); return; }
+  if (voiceRecording) stopRecording();   // don't run camera + recorder together
+  photoFacingMode = 'environment';
+  await openPhotoCamera();
+}
+
+async function openPhotoCamera() {
+  const panel = document.getElementById('photo-capture');
+  try {
+    photoStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: photoFacingMode }, width: { ideal: 1280 }, height: { ideal: 960 } },
+      audio: false
+    });
+    document.getElementById('photo-video').srcObject = photoStream;
+    panel.style.display = 'block';
+    document.getElementById('photo-live-wrap').style.display = 'flex';
+    document.getElementById('photo-review-wrap').style.display = 'none';
+    document.getElementById('photo-live-controls').style.display = 'flex';
+    document.getElementById('photo-review-controls').style.display = 'none';
+    document.getElementById('photo-capture-label').textContent = '\U0001f4f7 Camera';
+    document.getElementById('photo-capture-btn').classList.add('recording');
+  } catch (e) {
+    if (e.name === 'NotAllowedError') toast('Camera permission denied', true);
+    else if (e.name === 'NotFoundError' || e.name === 'OverconstrainedError') toast('No camera found on this device', true);
+    else toast('Could not open camera: ' + e.message, true);
+    closePhotoCapture();
+  }
+}
+
+function stopPhotoStream() {
+  if (photoStream) { photoStream.getTracks().forEach(t => t.stop()); photoStream = null; }
+  const video = document.getElementById('photo-video');
+  if (video) video.srcObject = null;
+}
+
+async function flipPhotoCamera() {
+  photoFacingMode = photoFacingMode === 'environment' ? 'user' : 'environment';
+  stopPhotoStream();
+  await openPhotoCamera();
+}
+
+function capturePhoto() {
+  const video = document.getElementById('photo-video');
+  if (!video || !video.videoWidth) { toast('Camera still warming up — try again', true); return; }
+  let w = video.videoWidth, h = video.videoHeight;
+  const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(w, h));
+  w = Math.round(w * scale); h = Math.round(h * scale);
+  const canvas = document.getElementById('photo-canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (photoFacingMode === 'user') { ctx.translate(w, 0); ctx.scale(-1, 1); } // un-mirror selfie
+  ctx.drawImage(video, 0, 0, w, h);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  stopPhotoStream();   // camera no longer needed — light off immediately
+  encodePhoto(canvas, 0);
+}
+
+function encodePhoto(canvas, qIndex) {
+  const quality = PHOTO_QUALITIES[qIndex] ?? PHOTO_QUALITIES[PHOTO_QUALITIES.length - 1];
+  canvas.toBlob(blob => {
+    if (!blob) { toast('Could not capture photo', true); return; }
+    const rtcReady = peerConnected && dataChannel?.readyState === 'open';
+    if (blob.size > MAX_FILE_BYTES && !rtcReady && qIndex < PHOTO_QUALITIES.length - 1) {
+      encodePhoto(canvas, qIndex + 1);   // shrink further to fit cloud limit
+      return;
+    }
+    photoBlob = blob;
+    canvas.width = 0; canvas.height = 0; // drop the pixel buffer
+    showPhotoReview();
+  }, 'image/jpeg', quality);
+}
+
+function showPhotoReview() {
+  if (photoReviewUrl) { URL.revokeObjectURL(photoReviewUrl); photoReviewUrl = null; }
+  photoReviewUrl = URL.createObjectURL(photoBlob);
+  document.getElementById('photo-review-img').src = photoReviewUrl;
+  document.getElementById('photo-live-wrap').style.display = 'none';
+  document.getElementById('photo-review-wrap').style.display = 'flex';
+  document.getElementById('photo-live-controls').style.display = 'none';
+  document.getElementById('photo-review-controls').style.display = 'flex';
+  const rtcReady = peerConnected && dataChannel?.readyState === 'open';
+  const fits = photoBlob.size <= MAX_FILE_BYTES;
+  const sizeStr = formatBytes(photoBlob.size);
+  document.getElementById('photo-capture-label').textContent = fits
+    ? '\U0001f4f7 Photo · ' + sizeStr
+    : (rtcReady ? '\U0001f4f7 Photo · ' + sizeStr + ' (direct transfer)'
+                : '⚠️ Photo · ' + sizeStr + ' (too large — connect a peer)');
+}
+
+async function retakePhoto() {
+  if (photoReviewUrl) { URL.revokeObjectURL(photoReviewUrl); photoReviewUrl = null; }
+  photoBlob = null;
+  document.getElementById('photo-review-img').src = '';
+  await openPhotoCamera();
+}
+
+function usePhoto() {
+  if (!photoBlob) { toast('No photo to use', true); return; }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const file = new File([photoBlob], 'photo-' + stamp + '.jpg', { type: 'image/jpeg' });
+  stageFiles([file]);
+  toast('Photo added — press Send to deliver');
+  closePhotoCapture();
+}
+
+function closePhotoCapture() {
+  stopPhotoStream();
+  if (photoReviewUrl) { URL.revokeObjectURL(photoReviewUrl); photoReviewUrl = null; }
+  photoBlob = null;
+  const canvas = document.getElementById('photo-canvas');
+  if (canvas) { canvas.width = 0; canvas.height = 0; }
+  const reviewImg = document.getElementById('photo-review-img');
+  if (reviewImg) reviewImg.src = '';
+  const panel = document.getElementById('photo-capture');
+  if (panel) panel.style.display = 'none';
+  const btn = document.getElementById('photo-capture-btn');
+  if (btn) btn.classList.remove('recording');
+}
+
+// Hide the camera button on devices/browsers with no camera capability
+document.addEventListener('DOMContentLoaded', () => {
+  if (!photoCaptureSupported()) {
+    const btn = document.getElementById('photo-capture-btn');
+    if (btn) btn.style.display = 'none';
+  }
+});
 
 // ===================== VOICE MESSAGES =====================
 let voiceRecorder = null;
