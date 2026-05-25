@@ -435,6 +435,12 @@ input::placeholder{color:var(--text3)}
 .call-btn.cam-on{background:var(--surface3);color:var(--text)}
 .call-btn.cam-on:hover{background:var(--surface2);border:1px solid var(--text3)}
 .call-btn.cam-off{background:var(--warn);color:#fff;box-shadow:0 0 12px rgba(255,107,107,.5)}
+.call-btn.screen-off{background:var(--surface3);color:var(--text)}
+.call-btn.screen-off:hover{background:var(--surface2);border:1px solid var(--text3)}
+.call-btn.screen-on{background:var(--beam);color:#000;box-shadow:0 0 12px var(--beam-dim)}
+/* Screen share: show the whole surface (no crop) on both ends */
+#video-box-remote.remote-screen video{object-fit:contain}
+#video-box-local.screen-sharing video{object-fit:contain;transform:none}
 /* Slash line drawn via pseudo-element when muted/cam-off */
 .call-btn.mute-on::after,.call-btn.cam-off::after{
   content:'';position:absolute;top:50%;left:50%;width:2px;height:60%;
@@ -656,6 +662,9 @@ input::placeholder{color:var(--text3)}
         </button>
         <button class="call-btn call-toggle cam-on" id="btn-cam-toggle" onclick="toggleCamera()" title="Camera on/off" style="display:none">
           <svg id="cam-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        </button>
+        <button class="call-btn call-toggle screen-off" id="btn-screen-share" onclick="toggleScreenShare()" title="Share your screen" style="display:none">
+          <svg id="screen-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         </button>
         <button class="call-btn call-end" id="btn-call-end" onclick="endCall()" title="End call" style="display:none">&#x1f6d1;</button>
       </div>
@@ -2354,6 +2363,16 @@ function createPeerConnection(config) {
       rv.srcObject.addTrack(e.track);
       rv.play().catch(err => console.log('Video play blocked:', err));
       document.getElementById('video-container').classList.add('active');
+      // If a remote video track ends (e.g. peer stopped a voice-call screen
+      // share), drop it and hide the container if nothing else needs it.
+      e.track.addEventListener('ended', () => {
+        try { if (rv.srcObject) rv.srcObject.removeTrack(e.track); } catch {}
+        const stillVideo = rv.srcObject && rv.srcObject.getVideoTracks().length > 0;
+        const localHasVideo = localStream && localStream.getVideoTracks().length > 0;
+        if (!stillVideo && !localHasVideo) {
+          document.getElementById('video-container').classList.remove('active');
+        }
+      });
     }
     
     // Don't set inCall here — let startCall/joinCall manage that
@@ -2542,6 +2561,7 @@ function setupDataChannel() {
           }
           break;
         case 'call-end': if (inCall) { endCall(); toast('Peer ended the call'); } break;
+        case 'screen-share': handlePeerScreenShare(!!msg.on); break;
       }
     } catch {}
   };
@@ -2916,6 +2936,9 @@ function endCall() {
   if (isWaiting) stopWaiting();
   pendingJoin = null;
 
+  // Release the screen capture if a share is in progress
+  if (isScreenSharing || screenStream) resetScreenShareForCallEnd();
+
   // Stop all local tracks
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
@@ -3137,6 +3160,202 @@ function showSelf(){
   };
 }
 
+// ===================== SCREEN SHARING =====================
+// Share a display surface during an active call. Stream discipline matches
+// the rest of Beam: the getDisplayMedia capture is stopped the instant the
+// share ends — via Beam's button, the browser's native "Stop sharing"
+// control, or the call ending.
+//
+// Video call: the outgoing camera track is swapped for the screen track
+//   with sender.replaceTrack() (no renegotiation). The camera track is
+//   kept alive but un-sent, so restoring it on stop is instant and cannot
+//   fail — the camera can never get stuck dark.
+// Voice call: there is no outgoing video track, so the screen track is
+//   added and the connection renegotiates; stopping removes it and
+//   renegotiates back to audio-only.
+let isScreenSharing = false;
+let screenStream = null;
+let screenSavedCameraTrack = null; // camera track parked during a video-call share
+let screenSender = null;           // sender created for a voice-call share
+let screenWasVideoCall = false;
+
+function screenShareSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+}
+
+async function toggleScreenShare() {
+  if (isScreenSharing) await stopScreenShare();
+  else await startScreenShare();
+}
+
+async function startScreenShare() {
+  if (!inCall || !peerConnection) { toast('Start a call first', true); return; }
+  if (!screenShareSupported()) { toast('Screen sharing is not supported on this browser', true); return; }
+  if (isScreenSharing) return;
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (e) {
+    // User cancelling the picker throws NotAllowedError/AbortError — stay quiet
+    if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') {
+      toast('Could not start screen share: ' + e.message, true);
+    }
+    return;
+  }
+
+  const screenTrack = stream.getVideoTracks()[0];
+  if (!screenTrack) { stream.getTracks().forEach(t => t.stop()); toast('No screen video available', true); return; }
+  screenStream = stream;
+
+  const videoSender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+  try {
+    if (videoSender) {
+      // Video call — park the camera track and swap in the screen
+      screenWasVideoCall = true;
+      screenSavedCameraTrack = videoSender.track;
+      await videoSender.replaceTrack(screenTrack);
+    } else {
+      // Voice call — add the screen track and renegotiate
+      screenWasVideoCall = false;
+      screenSender = peerConnection.addTrack(screenTrack, screenStream);
+      await doRenegotiation();
+    }
+  } catch (e) {
+    toast('Screen share failed: ' + e.message, true);
+    stream.getTracks().forEach(t => t.stop());
+    screenStream = null; screenSavedCameraTrack = null; screenSender = null;
+    return;
+  }
+
+  // Show what's being shared in the local preview
+  document.getElementById('video-box-local').classList.add('screen-sharing');
+  document.getElementById('local-video').srcObject = screenStream;
+  document.getElementById('video-container').classList.add('active');
+
+  // The browser's own "Stop sharing" control ends the track directly
+  screenTrack.addEventListener('ended', onScreenTrackEnded);
+
+  isScreenSharing = true;
+  if (dataChannel?.readyState === 'open') {
+    dataChannel.send(JSON.stringify({ type: 'screen-share', on: true }));
+  }
+  updateCallUI();
+  toast('Sharing your screen');
+}
+
+function onScreenTrackEnded() {
+  // Fired when the user stops sharing via the browser's native control
+  if (isScreenSharing) stopScreenShare();
+}
+
+async function stopScreenShare() {
+  if (!isScreenSharing) return;
+  isScreenSharing = false;
+
+  // Stop the display-capture stream (releases the OS-level capture)
+  if (screenStream) {
+    screenStream.getTracks().forEach(t => {
+      try { t.removeEventListener('ended', onScreenTrackEnded); } catch {}
+      t.stop();
+    });
+  }
+
+  try {
+    if (screenWasVideoCall) {
+      // Restore the camera — the parked track is still live, so swapping it
+      // back is instant and cannot leave the camera dark.
+      const videoSender = peerConnection?.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (videoSender && screenSavedCameraTrack && screenSavedCameraTrack.readyState === 'live') {
+        if (isCamOff) screenSavedCameraTrack.enabled = false;
+        await videoSender.replaceTrack(screenSavedCameraTrack);
+        document.getElementById('local-video').srcObject = localStream;
+      } else if (videoSender) {
+        // Parked track somehow died — re-acquire so the camera isn't stuck off
+        try {
+          const fresh = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false
+          });
+          const camTrack = fresh.getVideoTracks()[0];
+          if (localStream) {
+            localStream.getVideoTracks().forEach(t => { try { localStream.removeTrack(t); } catch {} });
+            localStream.addTrack(camTrack);
+          }
+          if (isCamOff) camTrack.enabled = false;
+          await videoSender.replaceTrack(camTrack);
+          document.getElementById('local-video').srcObject = localStream;
+        } catch {
+          document.getElementById('local-video').srcObject = null;
+        }
+      }
+    } else {
+      // Voice call — remove the screen track and renegotiate back to audio-only
+      if (screenSender && peerConnection) {
+        try { peerConnection.removeTrack(screenSender); } catch {}
+        await doRenegotiation();
+      }
+      document.getElementById('local-video').srcObject = null;
+      // Voice call had no local PiP — hide the container if nothing else needs it
+      const rv = document.getElementById('remote-video');
+      const remoteHasVideo = rv && rv.srcObject && rv.srcObject.getVideoTracks().length > 0;
+      if (!remoteHasVideo) document.getElementById('video-container').classList.remove('active');
+    }
+  } catch (e) {
+    console.error('stopScreenShare restore error:', e);
+  }
+
+  document.getElementById('video-box-local').classList.remove('screen-sharing');
+  screenStream = null;
+  screenSavedCameraTrack = null;
+  screenSender = null;
+  screenWasVideoCall = false;
+
+  if (dataChannel?.readyState === 'open') {
+    dataChannel.send(JSON.stringify({ type: 'screen-share', on: false }));
+  }
+  updateCallUI();
+  toast('Stopped sharing your screen');
+}
+
+// Called from endCall — stop the capture without trying to restore anything
+function resetScreenShareForCallEnd() {
+  if (screenStream) {
+    screenStream.getTracks().forEach(t => {
+      try { t.removeEventListener('ended', onScreenTrackEnded); } catch {}
+      t.stop();
+    });
+  }
+  isScreenSharing = false;
+  screenStream = null;
+  screenSavedCameraTrack = null;
+  screenSender = null;
+  screenWasVideoCall = false;
+  document.getElementById('video-box-local')?.classList.remove('screen-sharing');
+  const rbox = document.getElementById('video-box-remote');
+  if (rbox) rbox.classList.remove('remote-screen');
+  const rlabel = document.querySelector('#video-box-remote .video-label');
+  if (rlabel) rlabel.textContent = 'Peer';
+}
+
+// Remote side — peer started/stopped sharing their screen. Used only for
+// presentation: show the whole surface (no crop) and relabel the feed.
+function handlePeerScreenShare(on) {
+  const rbox = document.getElementById('video-box-remote');
+  if (!rbox) return;
+  rbox.classList.toggle('remote-screen', on);
+  const rlabel = document.querySelector('#video-box-remote .video-label');
+  if (rlabel) rlabel.textContent = on ? "Peer's screen" : 'Peer';
+  if (on) toast('Peer is sharing their screen');
+}
+
+// Hide the screen-share button on browsers with no getDisplayMedia support
+document.addEventListener('DOMContentLoaded', () => {
+  if (!screenShareSupported()) {
+    const btn = document.getElementById('btn-screen-share');
+    if (btn) btn.style.display = 'none';
+  }
+});
+
 function updateCallUI() {
   const bar = document.getElementById('call-bar');
   const activeOrWaiting = inCall || isWaiting;
@@ -3152,9 +3371,16 @@ function updateCallUI() {
   // Show end/cancel button during both call and wait
   document.getElementById('btn-call-end').style.display = activeOrWaiting ? 'flex' : 'none';
   document.getElementById('btn-call-end').title = isWaiting ? 'Cancel call' : 'End call';
-  // Show camera toggle only if video tracks exist
+  // Show camera toggle only if video tracks exist (hidden while screen sharing)
   const hasVideo = localStream?.getVideoTracks().length > 0;
-  document.getElementById('btn-cam-toggle').style.display = inCall && hasVideo ? 'flex' : 'none';
+  document.getElementById('btn-cam-toggle').style.display = inCall && hasVideo && !isScreenSharing ? 'flex' : 'none';
+  // Screen share toggle — only during a call, only where getDisplayMedia exists
+  const ssBtn = document.getElementById('btn-screen-share');
+  if (ssBtn) {
+    ssBtn.style.display = inCall && screenShareSupported() ? 'flex' : 'none';
+    ssBtn.className = 'call-btn call-toggle ' + (isScreenSharing ? 'screen-on' : 'screen-off');
+    ssBtn.title = isScreenSharing ? 'Stop sharing your screen' : 'Share your screen';
+  }
 }
 
 function startCallTimer() {
