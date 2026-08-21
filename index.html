@@ -441,6 +441,10 @@ input::placeholder{color:var(--text3)}
 /* Screen share: show the whole surface (no crop) on both ends */
 #video-box-remote.remote-screen video{object-fit:contain}
 #video-box-local.screen-sharing video{object-fit:contain;transform:none}
+/* Session lock: blur underlying mailbox so contents can't peek through */
+#screen-mailbox.mailbox-locked > *{filter:blur(14px);pointer-events:none;user-select:none;transition:filter .18s}
+#screen-mailbox.mailbox-locked{position:relative}
+#screen-mailbox.mailbox-locked::after{content:"\1f512  Session locked";position:absolute;top:24px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--surface3);color:var(--text2);font-size:12px;padding:6px 12px;border-radius:20px;z-index:5}
 /* Slash line drawn via pseudo-element when muted/cam-off */
 .call-btn.mute-on::after,.call-btn.cam-off::after{
   content:'';position:absolute;top:50%;left:50%;width:2px;height:60%;
@@ -914,8 +918,29 @@ input::placeholder{color:var(--text3)}
         </div>
         <div id="vault-actions-bar" style="display:none;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
           <span style="font-size:11px;color:var(--text3);flex:1">Vault contents</span>
+          <button class="sel-action-btn" id="btn-vault-select-mode" onclick="toggleVaultSelectMode()">☑ Select</button>
           <button class="sel-action-btn" onclick="showVaultPasscodeModal()" id="vault-passcode-btn">🔑 Set passcode</button>
           <button class="sel-action-btn" onclick="lockVault()" style="color:var(--accent)">Lock</button>
+        </div>
+
+        <!-- Vault multi-select action bar -->
+        <div id="vault-select-action-bar" style="display:none;flex-wrap:wrap;gap:6px;padding:10px 12px;background:var(--surface2);border:1px solid var(--accent-dim);border-radius:var(--radius-sm);margin-bottom:8px;align-items:center">
+          <span id="vault-select-count" style="font-size:12px;color:var(--text2);flex:1">None selected</span>
+          <button class="sel-action-btn" onclick="selectAllVault()">Select all</button>
+          <button class="sel-action-btn" onclick="deselectAllVault()">Deselect all</button>
+          <button class="sel-action-btn sel-export" onclick="showVaultExportPicker()">⬇ Export</button>
+          <button class="sel-action-btn" onclick="returnSelectedFromVault()" style="color:var(--beam);border-color:var(--beam-dim)">↩ Return</button>
+          <button class="sel-action-btn sel-delete" onclick="deleteSelectedFromVault()">🗑 Delete</button>
+          <button class="sel-action-btn" onclick="toggleVaultSelectMode()">Cancel</button>
+        </div>
+
+        <!-- Vault export format picker -->
+        <div id="vault-export-picker" style="display:none;flex-wrap:wrap;gap:6px;padding:8px 12px;background:var(--surface2);border:1px solid var(--surface3);border-radius:var(--radius-sm);margin-bottom:8px;align-items:center">
+          <span style="font-size:12px;color:var(--text2);flex:1">Export as:</span>
+          <button class="sel-action-btn" onclick="exportVaultSelected('txt')">📄 .txt</button>
+          <button class="sel-action-btn" onclick="exportVaultSelected('md')">📝 .md</button>
+          <button class="sel-action-btn" onclick="exportVaultSelected('pdf')">📑 PDF</button>
+          <button class="sel-action-btn" onclick="document.getElementById('vault-export-picker').style.display='none'">✕</button>
         </div>
         <div class="item-list" id="vault-list">
           <div class="empty-state">Vault is empty — move files here to store them privately</div>
@@ -1270,15 +1295,142 @@ async function submitPasscode() {
   const hash = await hashPasscode(input);
   if (hash !== currentBox.passcodeHash) { toast('Wrong passcode', true); return; }
   currentPasscode = input;
+  if (isReauth) {
+    // Session re-auth: unlock in place, don't re-enter the box.
+    unlockMailboxAfterReauth();
+    closePasscodeModal();
+    toast('Unlocked');
+    return;
+  }
   const code = pendingJoinCode; // save before close clears it
   closePasscodeModal();
   enterMailbox(code);
 }
 
 function closePasscodeModal() {
+  const wasReauth = isReauth && mailboxLocked;
   document.getElementById('passcode-modal').classList.remove('active');
   document.getElementById('modal-passcode').value = '';
   pendingJoinCode = null;
+  // Cancelling during a re-auth leaves the box entirely — safer than
+  // sitting on a blurred-but-visible mailbox screen.
+  if (wasReauth) {
+    isReauth = false;
+    mailboxLocked = false;
+    leaveBox();
+  }
+}
+
+// ===================== SESSION LOCK (idle + periodic re-auth) =====================
+// Prevents someone with brief physical access to an unlocked mailbox
+// (walk-away, borrowed device, unattended screen) from browsing contents.
+// Also enforces a periodic full re-auth as a hard ceiling.
+//
+// NOTE: this is a client-side session gate, NOT end-to-end encryption. The
+// Firestore rules for /boxes are 'allow read, write: if true', so anyone
+// with the box code can still read data straight from the Firebase REST
+// API. To close that gap we would need client-side encryption of fileData
+// and text (key derived from the box passcode, never sent to Firestore)
+// and/or Firebase-Auth-gated Firestore rules.
+const IDLE_LOCK_MS  = 2  * 60 * 1000;   // Re-prompt after 2 minutes idle
+const FORCE_LOCK_MS = 15 * 60 * 1000;   // Re-prompt every 15 minutes regardless
+const LOCK_CHECK_MS = 10 * 1000;        // Poll interval
+
+let lastActivityMs = Date.now();
+let lastAuthMs = Date.now();
+let lastActivityUpdateMs = 0;
+let mailboxLocked = false;
+let isReauth = false;
+let sessionLockInterval = null;
+
+function markActivity() {
+  const now = Date.now();
+  if (now - lastActivityUpdateMs < 500) return;
+  lastActivityUpdateMs = now;
+  lastActivityMs = now;
+}
+document.addEventListener('mousemove',  markActivity, { passive: true });
+document.addEventListener('mousedown',  markActivity, { passive: true });
+document.addEventListener('keydown',    markActivity, { passive: true });
+document.addEventListener('touchstart', markActivity, { passive: true });
+document.addEventListener('wheel',      markActivity, { passive: true });
+
+function startSessionLockTimers() {
+  stopSessionLockTimers();
+  lastActivityMs = Date.now();
+  lastAuthMs = Date.now();
+  mailboxLocked = false;
+  isReauth = false;
+  sessionLockInterval = setInterval(checkSessionLock, LOCK_CHECK_MS);
+}
+
+function stopSessionLockTimers() {
+  if (sessionLockInterval) { clearInterval(sessionLockInterval); sessionLockInterval = null; }
+  mailboxLocked = false;
+  isReauth = false;
+  document.getElementById('screen-mailbox')?.classList.remove('mailbox-locked');
+}
+
+function checkSessionLock() {
+  if (!currentBox || !currentBox.passcodeHash) return;   // nothing to relock against
+  if (mailboxLocked) return;
+  const now = Date.now();
+  const authFor = now - lastAuthMs;
+  const idleFor = now - lastActivityMs;
+  // In a live call or mid-recording, skip idle-lock (call/recording is presence).
+  // Force-lock (15 min ceiling) still applies and will interrupt if hit.
+  const skipIdle = inCall || voiceRecording;
+  if (authFor >= FORCE_LOCK_MS) { relockMailbox('force'); return; }
+  if (!skipIdle && idleFor >= IDLE_LOCK_MS) { relockMailbox('idle'); return; }
+}
+
+function relockMailbox(reason /* 'idle' | 'force' */) {
+  if (!currentBox || !currentBox.passcodeHash) return;
+  if (mailboxLocked) return;
+  mailboxLocked = true;
+  isReauth = true;
+  document.getElementById('screen-mailbox').classList.add('mailbox-locked');
+  // Aggressive cleanup so stale live state doesn't leak past the lock.
+  try { if (isWaiting) stopWaiting(); } catch {}
+  try { if (inCall) endCall(); } catch {}
+  try { if (voiceRecording) cancelRecording(); } catch {}
+  try { if (vaultUnlocked) lockVault(); } catch {}
+  // Repurpose the existing passcode modal for the re-auth prompt.
+  pendingJoinCode = currentBox.code;
+  const modal = document.getElementById('passcode-modal');
+  const h3   = modal?.querySelector('h3');
+  const p    = modal?.querySelector('p');
+  const btnU = modal?.querySelector('.btn-primary');
+  const btnC = modal?.querySelector('.btn-secondary');
+  if (h3)   h3.textContent   = '\u{1f512} Session locked';
+  if (p)    p.textContent    = reason === 'idle'
+              ? 'Locked after 2 minutes idle. Re-enter the mailbox passcode.'
+              : 'Scheduled re-auth (15-minute limit). Re-enter the mailbox passcode.';
+  if (btnU) btnU.textContent = 'Unlock';
+  if (btnC) btnC.textContent = 'Leave box';
+  const input = document.getElementById('modal-passcode');
+  if (input) input.value = '';
+  modal?.classList.add('active');
+  setTimeout(() => input?.focus(), 50);
+  toast(reason === 'idle' ? '\u{1f512} Locked after 2 minutes idle' : '\u{1f512} Session refresh - re-enter passcode');
+}
+
+function unlockMailboxAfterReauth() {
+  mailboxLocked = false;
+  isReauth = false;
+  lastActivityMs = Date.now();
+  lastAuthMs = Date.now();
+  document.getElementById('screen-mailbox')?.classList.remove('mailbox-locked');
+  // Restore the modal's original strings for future normal joins.
+  const modal = document.getElementById('passcode-modal');
+  const h3   = modal?.querySelector('h3');
+  const p    = modal?.querySelector('p');
+  const btnU = modal?.querySelector('.btn-primary');
+  const btnC = modal?.querySelector('.btn-secondary');
+  if (h3)   h3.textContent   = '\u{1f512} Passcode Required';
+  if (p)    p.textContent    = 'This mailbox is protected. Enter the passcode to access it.';
+  if (btnU) btnU.textContent = 'Unlock';
+  if (btnC) btnC.textContent = 'Cancel';
 }
 
 // ===================== ENTER / LEAVE =====================
@@ -1319,9 +1471,12 @@ function enterMailbox(code) {
   const url = new URL(window.location);
   url.searchParams.set('box', code);
   history.replaceState(null, '', url);
+  // Start the idle + periodic re-auth clock (no-op if box has no passcode)
+  startSessionLockTimers();
 }
 
 function leaveBox() {
+  stopSessionLockTimers();
   if (unsubItems) unsubItems();
   unsubItems = null;
   if (waitUnsub) { waitUnsub(); waitUnsub = null; }
@@ -4177,7 +4332,7 @@ function toggleSelectMode() {
   btn.style.borderColor = selectModeActive ? 'var(--beam)' : '';
   btn.style.color = selectModeActive ? 'var(--beam)' : '';
   // Apply/remove select-mode class on all cards
-  document.querySelectorAll('.item-card').forEach(card => {
+  document.querySelectorAll('#item-list .item-card').forEach(card => {
     card.classList.toggle('select-mode', selectModeActive);
     card.classList.remove('selected');
   });
@@ -4187,13 +4342,13 @@ function toggleSelectMode() {
 function toggleItemSelected(itemId) {
   if (selectedItems.has(itemId)) selectedItems.delete(itemId);
   else selectedItems.add(itemId);
-  const card = document.querySelector(`[data-item-id="${itemId}"]`);
+  const card = document.querySelector(`#item-list [data-item-id="${itemId}"]`);
   if (card) card.classList.toggle('selected', selectedItems.has(itemId));
   updateSelectCount();
 }
 
 function selectAll() {
-  document.querySelectorAll('.item-card[data-item-id]').forEach(card => {
+  document.querySelectorAll('#item-list .item-card[data-item-id]').forEach(card => {
     selectedItems.add(card.dataset.itemId);
     card.classList.add('selected');
   });
@@ -4202,7 +4357,7 @@ function selectAll() {
 
 function deselectAll() {
   selectedItems.clear();
-  document.querySelectorAll('.item-card').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('#item-list .item-card').forEach(c => c.classList.remove('selected'));
   updateSelectCount();
 }
 
@@ -4718,6 +4873,7 @@ function lockVault() {
   vaultUnlocked = false;
   vaultOpen = false;
   if (vaultUnsub) { vaultUnsub(); vaultUnsub = null; }
+  if (vaultSelectModeActive) toggleVaultSelectMode();
   document.getElementById('vault-body').style.display = 'none';
   document.getElementById('vault-chevron').style.transform = '';
   document.getElementById('vault-section').classList.remove('unlocked');
@@ -4728,6 +4884,8 @@ function cleanupVault() {
   if (vaultUnsub) { vaultUnsub(); vaultUnsub = null; }
   vaultUnlocked = false;
   vaultOpen = false;
+  vaultSelectModeActive = false;
+  vaultSelectedItems.clear();
   const body = document.getElementById('vault-body');
   const section = document.getElementById('vault-section');
   if (body) body.style.display = 'none';
@@ -4751,10 +4909,285 @@ function listenToVault() {
   }, err => console.log('Vault listen error:', err));
 }
 
+// ===================== VAULT SELECT MODE =====================
+// Vault gets its own independent select mode while unlocked. Uses the same
+// visual pattern as the main list (select checkbox, action bar, export
+// picker) but is scoped to #vault-list so main and vault selections never
+// interfere. Bulk operations: Export (txt/md/pdf), Return, Delete.
+let vaultSelectModeActive = false;
+const vaultSelectedItems = new Set();
+
+function toggleVaultSelectMode() {
+  vaultSelectModeActive = !vaultSelectModeActive;
+  vaultSelectedItems.clear();
+  const bar = document.getElementById('vault-select-action-bar');
+  const picker = document.getElementById('vault-export-picker');
+  const btn = document.getElementById('btn-vault-select-mode');
+  if (bar) bar.style.display = vaultSelectModeActive ? 'flex' : 'none';
+  if (picker) picker.style.display = 'none';
+  if (btn) {
+    btn.textContent = vaultSelectModeActive ? 'Done' : '☑ Select';
+    btn.style.borderColor = vaultSelectModeActive ? 'var(--beam)' : '';
+    btn.style.color = vaultSelectModeActive ? 'var(--beam)' : '';
+  }
+  document.querySelectorAll('#vault-list .item-card').forEach(card => {
+    card.classList.toggle('select-mode', vaultSelectModeActive);
+    card.classList.remove('selected');
+  });
+  updateVaultSelectCount();
+}
+
+function toggleVaultItemSelected(itemId) {
+  if (vaultSelectedItems.has(itemId)) vaultSelectedItems.delete(itemId);
+  else vaultSelectedItems.add(itemId);
+  const card = document.querySelector(`#vault-list [data-item-id="${itemId}"]`);
+  if (card) card.classList.toggle('selected', vaultSelectedItems.has(itemId));
+  updateVaultSelectCount();
+}
+
+function selectAllVault() {
+  document.querySelectorAll('#vault-list .item-card[data-item-id]').forEach(card => {
+    vaultSelectedItems.add(card.dataset.itemId);
+    card.classList.add('selected');
+  });
+  updateVaultSelectCount();
+}
+
+function deselectAllVault() {
+  vaultSelectedItems.clear();
+  document.querySelectorAll('#vault-list .item-card').forEach(c => c.classList.remove('selected'));
+  updateVaultSelectCount();
+}
+
+function updateVaultSelectCount() {
+  const el = document.getElementById('vault-select-count');
+  if (!el) return;
+  const n = vaultSelectedItems.size;
+  el.textContent = n === 0 ? 'None selected' : `${n} selected`;
+}
+
+function showVaultExportPicker() {
+  if (!vaultSelectedItems.size) { toast('Nothing selected', true); return; }
+  const p = document.getElementById('vault-export-picker');
+  if (p) p.style.display = p.style.display === 'flex' ? 'none' : 'flex';
+}
+
+// Silent download from the vault collection (mirrors downloadItemSilent)
+async function downloadVaultItemSilent(itemId, fallbackName) {
+  try {
+    const d = await vaultRef().doc(itemId).get();
+    const data = d.data();
+    if (!data?.fileData) return;
+    const byteChars = atob(data.fileData);
+    const byteArray = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([byteArray], { type: data.mimeType || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = data.fileName || fallbackName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (e) { console.log('Silent vault download failed:', e); }
+}
+
+async function exportVaultSelected(format) {
+  const picker = document.getElementById('vault-export-picker');
+  if (picker) picker.style.display = 'none';
+  if (!vaultSelectedItems.size) { toast('Nothing selected', true); return; }
+
+  const boxName = currentBox?.code?.toUpperCase() || 'MAILBOX';
+  const now = new Date().toLocaleString();
+  const ids = [...vaultSelectedItems];
+  const cards = ids
+    .map(id => document.querySelector(`#vault-list [data-item-id="${id}"]`))
+    .filter(Boolean);
+  cards.sort((a, b) => {
+    const aDate = a.dataset.itemCreated, bDate = b.dataset.itemCreated;
+    return aDate < bDate ? -1 : aDate > bDate ? 1 : 0;
+  });
+
+  const lines = [];
+  if (format === 'md') {
+    lines.push(`# Beam Vault Export — Mailbox ${boxName}`);
+    lines.push(`Exported: ${now}\n`);
+  } else {
+    lines.push(`BEAM VAULT EXPORT — Mailbox ${boxName}`);
+    lines.push(`Exported: ${now}`);
+    lines.push('='.repeat(50) + '\n');
+  }
+
+  let fileCount = 0;
+  for (const card of cards) {
+    const type = card.dataset.itemType;
+    const text = card.dataset.itemText;
+    const fileName = card.dataset.itemFileName;
+    const created = card.dataset.itemCreated ? new Date(card.dataset.itemCreated).toLocaleString() : '';
+    const hasData = card.dataset.itemHasData === '1';
+
+    if (format === 'md') {
+      lines.push('---');
+      if (type === 'message') {
+        lines.push(`**Message** · vaulted ${created}`);
+        lines.push('');
+        lines.push(text || '*(empty)*');
+      } else if (type === 'voice') {
+        lines.push(`**Voice message** · vaulted ${created}`);
+        lines.push('*(audio — download to listen)*');
+      } else if (type === 'video-msg') {
+        lines.push(`**Video message** · vaulted ${created}`);
+        lines.push('*(video — download to watch)*');
+      } else {
+        lines.push(`**File:** \`${fileName}\` · vaulted ${created}`);
+      }
+      lines.push('');
+    } else {
+      lines.push(`[vaulted ${created}]`);
+      if (type === 'message') lines.push(text || '(empty)');
+      else if (type === 'voice') lines.push('[Voice message]');
+      else if (type === 'video-msg') lines.push('[Video message]');
+      else lines.push(`[File: ${fileName}]`);
+      lines.push('');
+    }
+
+    if ((type === 'file' || type === 'voice' || type === 'video-msg') && hasData && format !== 'pdf') {
+      await downloadVaultItemSilent(card.dataset.itemId, fileName || 'file');
+      fileCount++;
+    }
+  }
+
+  const content = lines.join('\n');
+  const ext = format === 'md' ? 'md' : 'txt';
+  const filename = `beam-vault-${boxName.toLowerCase()}-export.${ext}`;
+
+  if (format === 'pdf') {
+    exportVaultAsPdf(cards, boxName, now);
+  } else {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`Exported ${ids.length} vault item(s)${fileCount ? ` + ${fileCount} file(s)` : ''}`);
+  }
+}
+
+function exportVaultAsPdf(cards, boxName, exportDate) {
+  const win = window.open('', '_blank');
+  if (!win) { toast('Pop-up blocked — allow popups to export PDF', true); return; }
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Beam Vault Export — ${boxName}</title>
+<style>
+  body{font-family:-apple-system,system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;color:#111;line-height:1.6}
+  h1{font-size:20px;border-bottom:2px solid #7c5cff;padding-bottom:8px;margin-bottom:4px}
+  .meta{font-size:12px;color:#666;margin-bottom:24px}
+  .item{margin-bottom:16px;padding:12px 14px;border-left:3px solid #7c5cff;background:#faf9ff;border-radius:0 6px 6px 0}
+  .item-time{font-size:11px;color:#888;margin-bottom:4px}
+  .item-body{font-size:14px;white-space:pre-wrap;word-break:break-word}
+  .item-file{font-size:13px;color:#555;font-style:italic}
+  @media print{body{margin:20px}button{display:none}}
+</style></head><body onload="setTimeout(function(){window.print()},300)">
+<h1>🔒 Beam Vault Export — Mailbox ${boxName}</h1>
+<div class="meta">Exported ${exportDate} · ${cards.length} vault item(s)</div>`);
+
+  for (const card of cards) {
+    const type = card.dataset.itemType;
+    const text = card.dataset.itemText;
+    const fileName = card.dataset.itemFileName;
+    const created = card.dataset.itemCreated ? new Date(card.dataset.itemCreated).toLocaleString() : '';
+    win.document.write('<div class="item">');
+    win.document.write(`<div class="item-time">vaulted ${created}</div>`);
+    if (type === 'message') {
+      win.document.write(`<div class="item-body">${(text||'(empty)').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`);
+    } else if (type === 'voice') {
+      win.document.write('<div class="item-file">🎤 Voice message</div>');
+    } else if (type === 'video-msg') {
+      win.document.write('<div class="item-file">📹 Video message</div>');
+    } else {
+      win.document.write(`<div class="item-file">📄 File: ${(fileName||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`);
+    }
+    win.document.write('</div>');
+  }
+  win.document.write('</body></html>');
+  win.document.close();
+  toast('PDF print dialog opened');
+}
+
+// Silent return-from-vault (no per-item toast) for use inside bulk return
+async function returnFromVaultSilent(itemId) {
+  const vaultDoc = await vaultRef().doc(itemId).get();
+  if (!vaultDoc.exists) return false;
+  const { vaultedAt, ...itemData } = vaultDoc.data();
+  itemData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+  await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).set(itemData);
+  await vaultRef().doc(itemId).delete();
+  return true;
+}
+
+async function returnSelectedFromVault() {
+  if (!vaultSelectedItems.size) { toast('Nothing selected', true); return; }
+  const ids = [...vaultSelectedItems];
+  let returned = 0, failed = 0;
+  for (const id of ids) {
+    try {
+      const ok = await returnFromVaultSilent(id);
+      if (ok) returned++;
+    } catch (e) { failed++; console.log('Bulk return failed:', e); }
+  }
+  toast(`Returned ${returned} item(s) to mailbox${failed ? ` (${failed} failed)` : ''}`);
+  if (vaultSelectModeActive) toggleVaultSelectMode();
+}
+
+async function deleteSelectedFromVault() {
+  if (!vaultSelectedItems.size) { toast('Nothing selected', true); return; }
+  if (!confirm(`Permanently delete ${vaultSelectedItems.size} vault item(s)? This cannot be undone.`)) return;
+  const ids = [...vaultSelectedItems];
+  let freed = 0, deleted = 0, failed = 0;
+  for (const id of ids) {
+    try {
+      const doc = await vaultRef().doc(id).get();
+      const size = doc.data()?.size || 0;
+      await vaultRef().doc(id).delete();
+      freed += size;
+      deleted++;
+    } catch (e) { failed++; console.log('Bulk vault delete failed:', e); }
+  }
+  if (freed > 0) {
+    try {
+      await db.collection('boxes').doc(currentBox.code).update({
+        totalBytes: firebase.firestore.FieldValue.increment(-freed)
+      });
+    } catch {}
+  }
+  toast(`Deleted ${deleted} vault item(s)${failed ? ` (${failed} failed)` : ''}`);
+  if (vaultSelectModeActive) toggleVaultSelectMode();
+}
+
 function renderVaultItem(item) {
   const div = document.createElement('div');
   div.className = 'item-card';
   const type = item.type || 'file';
+  const hasData = !!item.fileData;
+  const vaultedAt = item.vaultedAt?.toDate?.() || null;
+
+  // Data attrs mirror renderItem so vault select mode + export can read
+  // them straight off the DOM the same way the main flow does.
+  div.dataset.itemId = item.id;
+  div.dataset.itemType = type;
+  div.dataset.itemText = item.text || '';
+  div.dataset.itemFileName = item.fileName || '';
+  div.dataset.itemCreated = vaultedAt ? vaultedAt.toISOString() : '';
+  div.dataset.itemHasData = hasData ? '1' : '0';
+  div.dataset.itemSize = item.size || '0';
+  div.dataset.itemMime = item.mimeType || '';
+  div.dataset.source = 'vault';
+
+  // Click-to-toggle in select mode; ignore clicks on interactive children.
+  div.addEventListener('click', e => {
+    if (!vaultSelectModeActive) return;
+    if (e.target.closest('button') || e.target.closest('a') || e.target.closest('audio') || e.target.closest('video')) return;
+    toggleVaultItemSelected(item.id);
+  });
+
   const actions = `
     <div class="item-actions" style="flex-direction:column;gap:4px;align-items:flex-end">
       ${(type === 'file' || type === 'voice' || type === 'video-msg') && item.fileData
@@ -4762,7 +5195,7 @@ function renderVaultItem(item) {
       <button class="vault-item-action" onclick="returnFromVault('${item.id}')">↩ Return</button>
       <button class="vault-item-action" onclick="deleteVaultItem('${item.id}')" style="color:var(--warn);border-color:rgba(255,107,107,.3)">🗑 Delete</button>
     </div>`;
-  const vaultedMeta = `<div class="item-meta">vaulted ${timeAgo(item.vaultedAt?.toDate?.())}</div>`;
+  const vaultedMeta = `<div class="item-meta">vaulted ${timeAgo(vaultedAt)}</div>`;
 
   if (type === 'message') {
     div.innerHTML = `
@@ -4799,10 +5232,16 @@ function renderVaultItem(item) {
       <div class="item-info">
         <div class="item-name">${escapeHtml(item.fileName || '')}</div>
         ${preview}
-        <div class="item-meta">${formatBytes(item.size||0)} &middot; vaulted ${timeAgo(item.vaultedAt?.toDate?.())}</div>
+        <div class="item-meta">${formatBytes(item.size||0)} &middot; vaulted ${timeAgo(vaultedAt)}</div>
       </div>
       ${actions}`;
   }
+
+  // Select-mode checkbox + persisted state across re-renders
+  div.insertAdjacentHTML('afterbegin', '<div class="item-select-check">✓</div>');
+  if (vaultSelectModeActive) div.classList.add('select-mode');
+  if (vaultSelectedItems.has(item.id)) div.classList.add('selected');
+
   return div;
 }
 

@@ -37,7 +37,14 @@
     ASCII-only on purpose so PowerShell 5.1 does not choke on encoding.
 #>
 
-$HOLD_OPEN = $true
+param(
+    # Non-interactive mode used by beam-watcher: skip the y/N prompt and do
+    # NOT hold the window open at the end. Also suppresses the "press Enter
+    # to close" pause on error paths.
+    [switch]$Auto
+)
+
+$HOLD_OPEN = -not $Auto.IsPresent
 $script:exitCode = 0
 
 function Stop-Here([int]$code = 0) {
@@ -196,11 +203,15 @@ try {
 
     # -- Confirm -----------------------------------------------------
     Write-Host ""
-    $confirm = Read-Host "Commit and push to origin? (y/N)"
-    if ($confirm -notmatch '^(y|Y|yes|YES)$') {
-        Write-Host "Aborted. Files copied into repo but NOT committed." -ForegroundColor Yellow
-        Remove-Item $tmpCommitFile -ErrorAction SilentlyContinue
-        Stop-Here 0
+    if ($Auto) {
+        Write-Host "Auto mode: skipping confirmation and proceeding to commit + push." -ForegroundColor DarkGray
+    } else {
+        $confirm = Read-Host "Commit and push to origin? (y/N)"
+        if ($confirm -notmatch '^(y|Y|yes|YES)$') {
+            Write-Host "Aborted. Files copied into repo but NOT committed." -ForegroundColor Yellow
+            Remove-Item $tmpCommitFile -ErrorAction SilentlyContinue
+            Stop-Here 0
+        }
     }
 
     # -- Commit + push -----------------------------------------------
