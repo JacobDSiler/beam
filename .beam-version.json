@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "bumpedAt": "2026-08-21T12:08:15Z",
-  "note": "Initial version \u2014 session-lock re-auth + watcher install",
+  "version": 2,
+  "bumpedAt": "2026-09-02T10:26:36Z",
+  "note": "E2E encryption of mailbox + vault content",
   "schemaNote": "Beam-watcher deploy signal. Bump 'version' AFTER writing index.html + .beam-pending-commit.txt to trigger an auto-push."
 }

@@ -1230,6 +1230,20 @@ async function createBox() {
       itemTTLDays
     };
 
+    // If passcode-protected, initialize E2E encryption at creation:
+    //   - encSalt:    per-box PBKDF2 salt (stored plaintext; not sensitive)
+    //   - encVerify:  known plaintext encrypted with the derived key
+    //                 (lets us verify the passcode on unlock without
+    //                  needing a plain hash comparison)
+    if (usePasscode) {
+      const salt = randomBytes(32);
+      const key  = await deriveKey(passcode, salt);
+      boxData.encSalt    = bytesToBase64(salt);
+      boxData.encVersion = ENC_VERSION;
+      boxData.encVerify  = await encryptString(key, ENC_VERIFY_PLAINTEXT);
+      boxKey = key;
+    }
+
     await docRef.set(boxData);
     currentBox = { ...boxData, createdAt: new Date(), itemTTLDays };
     currentPasscode = passcode;
@@ -1295,8 +1309,45 @@ async function submitPasscode() {
   const hash = await hashPasscode(input);
   if (hash !== currentBox.passcodeHash) { toast('Wrong passcode', true); return; }
   currentPasscode = input;
+
+  // Derive the encryption key from the just-entered passcode:
+  //   (a) encrypted box (has encSalt + encVerify): derive, verify by
+  //       decrypting encVerify -> must equal ENC_VERIFY_PLAINTEXT.
+  //   (b) legacy passcoded box (no encSalt): mint a salt, derive a key,
+  //       write encVerify back to the box doc. Old items stay plaintext
+  //       and remain readable; new items get encrypted from now on.
+  try {
+    if (currentBox.encSalt && currentBox.encVerify) {
+      const salt = base64ToBytes(currentBox.encSalt);
+      const key  = await deriveKey(input, salt);
+      const verified = await decryptString(key, currentBox.encVerify).catch(() => null);
+      if (verified !== ENC_VERIFY_PLAINTEXT) {
+        toast('Encryption key mismatch - passcode may be wrong', true);
+        return;
+      }
+      boxKey = key;
+    } else if (currentBox.hasPasscode) {
+      const salt = randomBytes(32);
+      const key  = await deriveKey(input, salt);
+      const encVerify = await encryptString(key, ENC_VERIFY_PLAINTEXT);
+      await db.collection('boxes').doc(currentBox.code).update({
+        encSalt:    bytesToBase64(salt),
+        encVersion: ENC_VERSION,
+        encVerify
+      });
+      currentBox.encSalt    = bytesToBase64(salt);
+      currentBox.encVersion = ENC_VERSION;
+      currentBox.encVerify  = encVerify;
+      boxKey = key;
+      console.log('Beam: upgraded legacy passcoded box to encryption.');
+    }
+  } catch (e) {
+    console.error('Key derivation failed:', e);
+    toast('Encryption setup failed: ' + e.message, true);
+    return;
+  }
+
   if (isReauth) {
-    // Session re-auth: unlock in place, don't re-enter the box.
     unlockMailboxAfterReauth();
     closePasscodeModal();
     toast('Unlocked');
@@ -1319,6 +1370,128 @@ function closePasscodeModal() {
     mailboxLocked = false;
     leaveBox();
   }
+}
+
+// ===================== E2E ENCRYPTION =====================
+// Client-side end-to-end encryption of mailbox content. All sensitive
+// fields (text, fileData, fileName, replyToPreview) are AES-GCM-256
+// encrypted before hitting Firestore, using a key derived from the box
+// passcode via PBKDF2-SHA-256 (200k iterations) with a per-box salt.
+// Firestore stores only ciphertext + IV + salt; the passcode itself
+// never leaves the client.
+//
+// Backward compatibility:
+//   - Boxes with no passcode: no encryption possible; content is plaintext.
+//     A banner warns the user their data is not encrypted at rest.
+//   - Legacy boxes with a passcode but no encSalt (created before this
+//     change): auto-upgraded on first unlock. Old plaintext items keep
+//     working; new items are encrypted from that point on.
+//   - Legacy plaintext items in an encrypted box: still readable, marked
+//     with a "not encrypted" badge in the UI.
+const ENC_VERSION = 1;
+const ENC_VERIFY_PLAINTEXT = 'beam-verify-v1';
+const PBKDF2_ITERATIONS = 200000;
+let boxKey = null;   // Cached CryptoKey while the mailbox is unlocked
+
+function randomBytes(n) { return crypto.getRandomValues(new Uint8Array(n)); }
+
+function bytesToBase64(bytes) {
+  let s = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(s);
+}
+function base64ToBytes(b64) {
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
+async function deriveKey(passcode, saltBytes, iterations = PBKDF2_ITERATIONS) {
+  const baseKey = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(passcode),
+    { name: 'PBKDF2' }, false, ['deriveKey']
+  );
+  return await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: saltBytes, iterations, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false, ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptBytes(key, plainBytes) {
+  const iv = randomBytes(12);
+  const buf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plainBytes);
+  return { iv: bytesToBase64(iv), ct: bytesToBase64(new Uint8Array(buf)) };
+}
+async function decryptBytes(key, blob) {
+  const iv = base64ToBytes(blob.iv);
+  const ct = base64ToBytes(blob.ct);
+  const buf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return new Uint8Array(buf);
+}
+async function encryptString(key, plaintext) {
+  return await encryptBytes(key, new TextEncoder().encode(plaintext));
+}
+async function decryptString(key, blob) {
+  return new TextDecoder().decode(await decryptBytes(key, blob));
+}
+
+// Encrypt sensitive fields on outgoing itemData IN PLACE. No-op if there
+// is no boxKey (unencrypted box or not unlocked yet).
+async function encryptItemForFirestore(itemData) {
+  if (!boxKey || !itemData) return itemData;
+  itemData.enc = ENC_VERSION;
+  if (typeof itemData.text === 'string' && itemData.text.length > 0) {
+    itemData.textEnc = await encryptString(boxKey, itemData.text);
+    delete itemData.text;
+  }
+  if (typeof itemData.fileName === 'string' && itemData.fileName.length > 0) {
+    itemData.fileNameEnc = await encryptString(boxKey, itemData.fileName);
+    delete itemData.fileName;
+  }
+  if (typeof itemData.replyToPreview === 'string' && itemData.replyToPreview.length > 0) {
+    itemData.replyToPreviewEnc = await encryptString(boxKey, itemData.replyToPreview);
+    delete itemData.replyToPreview;
+  }
+  if (typeof itemData.fileData === 'string' && itemData.fileData.length > 0) {
+    // fileData is a base64 string of raw bytes -> decode, encrypt, re-encode.
+    const rawBytes = base64ToBytes(itemData.fileData);
+    itemData.fileDataEnc = await encryptBytes(boxKey, rawBytes);
+    delete itemData.fileData;
+  }
+  return itemData;
+}
+
+// Decrypt encrypted fields on a raw Firestore doc IN PLACE, populating
+// the plaintext versions of those fields. Legacy plaintext items pass
+// through unchanged. Called from listeners AND from download paths.
+async function decryptItemInPlace(item) {
+  if (!item || item.enc !== ENC_VERSION) return item;
+  if (!boxKey) { item._needsKey = true; return item; }
+  try {
+    if (item.textEnc && item.text == null) {
+      item.text = await decryptString(boxKey, item.textEnc);
+    }
+    if (item.fileNameEnc && item.fileName == null) {
+      item.fileName = await decryptString(boxKey, item.fileNameEnc);
+    }
+    if (item.replyToPreviewEnc && item.replyToPreview == null) {
+      item.replyToPreview = await decryptString(boxKey, item.replyToPreviewEnc);
+    }
+    if (item.fileDataEnc && item.fileData == null) {
+      const rawBytes = await decryptBytes(boxKey, item.fileDataEnc);
+      item.fileData = bytesToBase64(rawBytes);
+    }
+  } catch (e) {
+    console.warn('Decrypt failed for item', item.id, e);
+    item._decryptFailed = true;
+  }
+  return item;
 }
 
 // ===================== SESSION LOCK (idle + periodic re-auth) =====================
@@ -1395,6 +1568,10 @@ function relockMailbox(reason /* 'idle' | 'force' */) {
   try { if (inCall) endCall(); } catch {}
   try { if (voiceRecording) cancelRecording(); } catch {}
   try { if (vaultUnlocked) lockVault(); } catch {}
+  // Drop the cached key + plaintext passcode so contents can't be
+  // decrypted or re-authenticated without a fresh passcode entry.
+  boxKey = null;
+  currentPasscode = null;
   // Repurpose the existing passcode modal for the re-auth prompt.
   pendingJoinCode = currentBox.code;
   const modal = document.getElementById('passcode-modal');
@@ -1473,10 +1650,37 @@ function enterMailbox(code) {
   history.replaceState(null, '', url);
   // Start the idle + periodic re-auth clock (no-op if box has no passcode)
   startSessionLockTimers();
+  // Show or clear the encryption-status banner. Passcode-less boxes are
+  // world-readable via Firestore (no key material exists), so we warn.
+  updateEncryptionBanner();
+}
+
+function updateEncryptionBanner() {
+  const parent = document.querySelector('#screen-mailbox .box-header');
+  if (!parent) return;
+  let banner = document.getElementById('enc-status-banner');
+  if (!currentBox || !currentBox.hasPasscode) {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'enc-status-banner';
+      banner.style.cssText =
+        'margin:8px 0;padding:8px 12px;border-radius:var(--radius-sm);' +
+        'background:rgba(255,107,107,.10);border:1px solid rgba(255,107,107,.35);' +
+        'font-size:12px;color:var(--warn);line-height:1.45';
+      banner.innerHTML =
+        '⚠️ <strong>Not encrypted.</strong> This mailbox has no passcode, ' +
+        'so anyone with the box code can read its contents. Create a new box ' +
+        'with a passcode to enable end-to-end encryption of new items.';
+      parent.appendChild(banner);
+    }
+  } else if (banner) {
+    banner.remove();
+  }
 }
 
 function leaveBox() {
   stopSessionLockTimers();
+  boxKey = null;
   if (unsubItems) unsubItems();
   unsubItems = null;
   if (waitUnsub) { waitUnsub(); waitUnsub = null; }
@@ -1634,7 +1838,7 @@ function listenToItems(code) {
   lastKnownItemId = null;
 
   const ref = db.collection('boxes').doc(code).collection('items').orderBy('createdAt', 'asc');
-  unsubItems = ref.onSnapshot(snap => {
+  unsubItems = ref.onSnapshot(async snap => {
     const list = getItemListEl();
     const wasPinned = isScrollPinned;
     const prevLastId = lastKnownItemId;
@@ -1643,13 +1847,16 @@ function listenToItems(code) {
 
     // Rebuild allItems from snapshot, applying hidden + subscriber filters
     const hidden = getHiddenItems();
-    allItems = [];
+    const buffer = [];
     snap.forEach(doc => {
       const data = doc.data();
       if (hidden.includes(doc.id)) return;
       if (data.type === 'subscriber') return;
-      allItems.push({ id: doc.id, ...data });
+      buffer.push({ id: doc.id, ...data });
     });
+    // Decrypt encrypted items (no-op for legacy plaintext items)
+    if (boxKey) await Promise.all(buffer.map(i => decryptItemInPlace(i)));
+    allItems = buffer;
     const total = allItems.length;
     lastKnownItemId = total ? allItems[total - 1].id : null;
 
@@ -2199,6 +2406,7 @@ async function sendFileViaFirestore(file, itemPassHash) {
     };
     if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
 
+    await encryptItemForFirestore(itemData);
     await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
     await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(file.size) });
 
@@ -2324,6 +2532,7 @@ async function sendMessage() {
           // Send text part to Firestore, file part via RTC
           if (text) {
             itemData.type = 'message';
+            await encryptItemForFirestore(itemData);
             await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
           }
           const file = new File([mediaBlob], mediaType + '-message.webm', { type: mediaBlob.type });
@@ -2340,6 +2549,7 @@ async function sendMessage() {
           if (text) {
             itemData.type = 'message';
             delete itemData.fileData;
+            await encryptItemForFirestore(itemData);
             await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
             toast('Text sent (media skipped — too large)');
           }
@@ -2363,10 +2573,12 @@ async function sendMessage() {
       itemData.size = size;
       itemData.mimeType = mediaBlob.type;
 
+      await encryptItemForFirestore(itemData);
       await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
       await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
     } else {
       // Text only
+      await encryptItemForFirestore(itemData);
       await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
     }
 
@@ -2390,12 +2602,17 @@ async function downloadItem(itemId) {
   try {
     const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
     const data = d.data();
+    // Decrypt encrypted fields (fileData, fileName). No-op for legacy items.
+    await decryptItemInPlace(data);
 
     if (data?.sentViaRTC && !data?.fileData) {
       toast('This file was sent directly via peer transfer and not stored in the cloud.', true);
       return;
     }
-    if (!data?.fileData) { toast('No file data found', true); return; }
+    if (!data?.fileData) {
+      if (data?._needsKey) { toast('Unlock the mailbox first to decrypt this file', true); return; }
+      toast('No file data found', true); return;
+    }
 
     const byteChars = atob(data.fileData);
     const byteArray = new Uint8Array(byteChars.length);
@@ -3886,6 +4103,7 @@ async function saveRecordedMessage(blob, type) {
       };
       if (itemPassHash) itemData.itemPasscodeHash = itemPassHash;
       if (replyToState) { itemData.replyToId = replyToState.id; itemData.replyToPreview = replyToState.preview; }
+      await encryptItemForFirestore(itemData);
       await db.collection('boxes').doc(currentBox.code).collection('items').add(itemData);
       await db.collection('boxes').doc(currentBox.code).update({ totalBytes: firebase.firestore.FieldValue.increment(size) });
       toast(type === 'video' ? 'Video message sent' : 'Voice message sent');
@@ -4520,6 +4738,7 @@ async function downloadItemSilent(itemId, fallbackName) {
   try {
     const d = await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).get();
     const data = d.data();
+    await decryptItemInPlace(data);
     if (!data?.fileData) return;
     const byteChars = atob(data.fileData);
     const byteArray = new Uint8Array(byteChars.length);
@@ -4659,10 +4878,17 @@ async function saveEditMessage(itemId) {
   if (!currentBox) return;
 
   try {
-    await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).update({
-      text: newText,
-      editedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    const updateData = { editedAt: firebase.firestore.FieldValue.serverTimestamp() };
+    if (boxKey) {
+      updateData.enc = ENC_VERSION;
+      updateData.textEnc = await encryptString(boxKey, newText);
+      // If this item was legacy plaintext, drop the old text field so
+      // ciphertext + plaintext don't coexist on the same doc.
+      updateData.text = firebase.firestore.FieldValue.delete();
+    } else {
+      updateData.text = newText;
+    }
+    await db.collection('boxes').doc(currentBox.code).collection('items').doc(itemId).update(updateData);
     // Firestore listener re-renders the item — clean up optimistically
     cancelEditMessage(itemId);
   } catch(e) {
@@ -4894,7 +5120,7 @@ function cleanupVault() {
 
 function listenToVault() {
   if (vaultUnsub) { vaultUnsub(); }
-  vaultUnsub = vaultRef().orderBy('vaultedAt', 'asc').onSnapshot(snap => {
+  vaultUnsub = vaultRef().orderBy('vaultedAt', 'asc').onSnapshot(async snap => {
     const list = document.getElementById('vault-list');
     const badge = document.getElementById('vault-count-badge');
     const count = snap.size;
@@ -4904,8 +5130,11 @@ function listenToVault() {
       list.innerHTML = '<div class="empty-state">Vault is empty — move files here to store them privately</div>';
       return;
     }
+    const buffer = [];
+    snap.forEach(doc => buffer.push({ id: doc.id, ...doc.data() }));
+    if (boxKey) await Promise.all(buffer.map(i => decryptItemInPlace(i)));
     list.innerHTML = '';
-    snap.forEach(doc => list.appendChild(renderVaultItem({ id: doc.id, ...doc.data() })));
+    buffer.forEach(item => list.appendChild(renderVaultItem(item)));
   }, err => console.log('Vault listen error:', err));
 }
 
@@ -4977,6 +5206,7 @@ async function downloadVaultItemSilent(itemId, fallbackName) {
   try {
     const d = await vaultRef().doc(itemId).get();
     const data = d.data();
+    await decryptItemInPlace(data);
     if (!data?.fileData) return;
     const byteChars = atob(data.fileData);
     const byteArray = new Uint8Array(byteChars.length);
@@ -5296,7 +5526,11 @@ async function downloadVaultItem(itemId) {
   try {
     const doc = await vaultRef().doc(itemId).get();
     const data = doc.data();
-    if (!data?.fileData) { toast('No file data', true); return; }
+    await decryptItemInPlace(data);
+    if (!data?.fileData) {
+      if (data?._needsKey) { toast('Unlock the mailbox first to decrypt this file', true); return; }
+      toast('No file data', true); return;
+    }
     const byteChars = atob(data.fileData);
     const byteArray = new Uint8Array(byteChars.length);
     for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
