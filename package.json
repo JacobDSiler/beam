@@ -1,0 +1,23 @@
+{
+  "name": "beam",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Beam — private mailbox + vault for coercive-control / DV situations.",
+  "scripts": {
+    "prep": "node scripts/prep-web.js",
+    "android:init": "node scripts/prep-web.js && npx cap add android && node scripts/customize-android.js",
+    "android:sync": "node scripts/prep-web.js && npx cap sync android",
+    "android:build": "node scripts/prep-web.js && npx cap sync android && cd android && ./gradlew bundleRelease",
+    "android:build:win": "node scripts/prep-web.js && npx cap sync android && cd android && gradlew.bat bundleRelease",
+    "icons": "npx @capacitor/assets generate --iconBackgroundColor #000000 --iconBackgroundColorDark #000000 --splashBackgroundColor #000000 --androidProject android --assetPath android-kit/assets"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/app": "^6.0.1",
+    "@capacitor/core": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.1.2"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "appId": "com.silertech.beam",
+  "appName": "Beam",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "hostname": "beam.local"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false,
+    "backgroundColor": "#0b0b12"
+  }
+}
