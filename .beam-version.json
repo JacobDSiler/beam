@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "bumpedAt": "2026-09-02T10:26:36Z",
-  "note": "E2E encryption of mailbox + vault content",
+  "version": 3,
+  "bumpedAt": "2026-09-04T10:49:22Z",
+  "note": "Export All (mailbox + optional vault) \u2014 ZIP / TXT / MD / PDF",
   "schemaNote": "Beam-watcher deploy signal. Bump 'version' AFTER writing index.html + .beam-pending-commit.txt to trigger an auto-push."
 }
